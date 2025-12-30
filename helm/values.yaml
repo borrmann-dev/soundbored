@@ -13,19 +13,9 @@ env:
   PHX_SERVER: "true"
   SCHEME: "https"
 
-# Secrets (sensitive environment variables)
-# These will be created as a Kubernetes Secret
-secrets:
-  # Discord bot token (required)
-  DISCORD_TOKEN: ""
-  # Discord OAuth credentials (required for login)
-  DISCORD_CLIENT_ID: ""
-  DISCORD_CLIENT_SECRET: ""
-  # Phoenix secret key base - generate with: openssl rand -base64 48
-  SECRET_KEY_BASE: ""
-  # Optional: Basic auth credentials (leave empty to disable)
-  BASIC_AUTH_USERNAME: ""
-  BASIC_AUTH_PASSWORD: ""
+# Secrets are defined in secrets.yaml (gitignored)
+# See secrets.yaml.example for required values
+# Install with: ./install.sh -f secrets.yaml
 
 # Persistent storage for uploads and SQLite database
 persistence:

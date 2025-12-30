@@ -50,6 +50,9 @@ npm-debug.log
 
 .env
 
+# Helm secrets (never commit!)
+helm/secrets.yaml
+
 .DS_Store
 
 
