@@ -3,8 +3,20 @@ name: CI/CD Pipeline
 on:
   push:
     branches: [main, master]
+    paths-ignore:
+      - "helm/**"
+      - ".github/**"
+      - ".cursor/**"
+      - "AGENTS.md"
+      - "README.md"
   pull_request:
     branches: [main, master]
+    paths-ignore:
+      - "helm/**"
+      - ".github/**"
+      - ".cursor/**"
+      - "AGENTS.md"
+      - "README.md"
 
 env:
   REGISTRY: ghcr.io
@@ -102,62 +114,61 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # TODO: Uncomment deployment steps after verifying image builds correctly
-      # - name: Install Helm
-      #   run: |
-      #     curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
-      #     chmod 700 get_helm.sh
-      #     ./get_helm.sh
+      - name: Install Helm
+        run: |
+          curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+          chmod 700 get_helm.sh
+          ./get_helm.sh
 
-      # - name: Install kubectl
-      #   run: |
-      #     KUBECTL_VERSION=$(curl -L -s https://dl.k8s.io/release/stable.txt)
-      #     curl -LO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
-      #     chmod +x kubectl
-      #     sudo mv kubectl /usr/local/bin/
+      - name: Install kubectl
+        run: |
+          KUBECTL_VERSION=$(curl -L -s https://dl.k8s.io/release/stable.txt)
+          curl -LO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+          chmod +x kubectl
+          sudo mv kubectl /usr/local/bin/
 
-      # - name: Deploy to K3s
-      #   run: |
-      #     # Setup SSH keys
-      #     mkdir -p ~/.ssh
-      #     echo "${{ secrets.PRIVATE_KEY }}" > ~/.ssh/id_rsa
-      #     chmod 600 ~/.ssh/id_rsa
-      #     echo "${{ secrets.PUBLIC_KEY }}" > ~/.ssh/id_rsa.pub
-      #     chmod 644 ~/.ssh/id_rsa.pub
+      - name: Deploy to K3s
+        run: |
+          # Setup SSH keys
+          mkdir -p ~/.ssh
+          echo "${{ secrets.PRIVATE_KEY }}" > ~/.ssh/id_rsa
+          chmod 600 ~/.ssh/id_rsa
+          echo "${{ secrets.PUBLIC_KEY }}" > ~/.ssh/id_rsa.pub
+          chmod 644 ~/.ssh/id_rsa.pub
 
-      #     # Add server to known hosts
-      #     ssh-keyscan -H borrmann.dev >> ~/.ssh/known_hosts
+          # Add server to known hosts
+          ssh-keyscan -H borrmann.dev >> ~/.ssh/known_hosts
 
-      #     # Create SSH tunnel to K3s API server
-      #     ssh -f -N -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o ServerAliveInterval=60 -L 6443:127.0.0.1:6443 github@borrmann.dev
+          # Create SSH tunnel to K3s API server
+          ssh -f -N -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o ServerAliveInterval=60 -L 6443:127.0.0.1:6443 github@borrmann.dev
 
-      #     # Create kubeconfig from secret and modify to use tunnel
-      #     echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > kubeconfig
-      #     sed -i 's|https://.*:6443|https://127.0.0.1:6443|g' kubeconfig
-      #     export KUBECONFIG=kubeconfig
+          # Create kubeconfig from secret and modify to use tunnel
+          echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > kubeconfig
+          sed -i 's|https://.*:6443|https://127.0.0.1:6443|g' kubeconfig
+          export KUBECONFIG=kubeconfig
 
-      #     # Wait for tunnel to establish
-      #     sleep 3
+          # Wait for tunnel to establish
+          sleep 3
 
-      #     # Test connection
-      #     kubectl cluster-info
+          # Test connection
+          kubectl cluster-info
 
-      #     # Install/upgrade the application
-      #     helm upgrade --install soundbored helm/ \
-      #       --namespace soundbored \
-      #       --create-namespace \
-      #       --wait \
-      #       --timeout=5m
+          # Install/upgrade the application
+          helm upgrade --install soundbored helm/ \
+            --namespace soundbored \
+            --create-namespace \
+            --wait \
+            --timeout=5m
 
-      #     # Force restart deployment to pick up new image
-      #     kubectl rollout restart deployment/soundbored -n soundbored
-      #     kubectl rollout status deployment/soundbored -n soundbored --timeout=300s
+          # Force restart deployment to pick up new image
+          kubectl rollout restart deployment/soundbored -n soundbored
+          kubectl rollout status deployment/soundbored -n soundbored --timeout=300s
 
-      # - name: Cleanup
-      #   if: always()
-      #   run: |
-      #     # Kill SSH tunnel
-      #     pkill -f "ssh.*-L 6443:127.0.0.1:6443" || true
+      - name: Cleanup
+        if: always()
+        run: |
+          # Kill SSH tunnel
+          pkill -f "ssh.*-L 6443:127.0.0.1:6443" || true
 
-      #     # Clean up files
-      #     rm -f kubeconfig ~/.ssh/id_rsa ~/.ssh/id_rsa.pub
+          # Clean up files
+          rm -f kubeconfig ~/.ssh/id_rsa ~/.ssh/id_rsa.pub
