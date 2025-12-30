@@ -20,7 +20,7 @@ env:
 # Persistent storage for uploads and SQLite database
 persistence:
   enabled: true
-  size: 5Gi
+  size: 30Gi
 
 ingress:
   enabled: true
