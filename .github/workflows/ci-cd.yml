@@ -1,0 +1,163 @@
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+    branches: [main, master]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:15
+        env:
+          POSTGRES_PASSWORD: postgres
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: "1.19"
+          otp-version: "27"
+
+      - name: Cache deps
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-
+
+      - name: Install dependencies
+        run: mix deps.get
+
+      - name: Check formatting
+        run: mix format --check-formatted
+
+      - name: Run Credo
+        run: mix credo --strict
+
+      - name: Run tests
+        run: mix test
+        env:
+          MIX_ENV: test
+
+  build-push-deploy:
+    needs: test
+    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' || github.ref == 'refs/heads/master'
+    permissions:
+      contents: read
+      packages: write
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to Container Registry
+        uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Extract metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+          tags: |
+            type=ref,event=branch
+            type=sha,prefix={{branch}}-
+            type=raw,value=latest,enable={{is_default_branch}}
+
+      - name: Build and push Docker image
+        uses: docker/build-push-action@v5
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # TODO: Uncomment deployment steps after verifying image builds correctly
+      # - name: Install Helm
+      #   run: |
+      #     curl -fsSL -o get_helm.sh https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3
+      #     chmod 700 get_helm.sh
+      #     ./get_helm.sh
+
+      # - name: Install kubectl
+      #   run: |
+      #     KUBECTL_VERSION=$(curl -L -s https://dl.k8s.io/release/stable.txt)
+      #     curl -LO "https://dl.k8s.io/release/${KUBECTL_VERSION}/bin/linux/amd64/kubectl"
+      #     chmod +x kubectl
+      #     sudo mv kubectl /usr/local/bin/
+
+      # - name: Deploy to K3s
+      #   run: |
+      #     # Setup SSH keys
+      #     mkdir -p ~/.ssh
+      #     echo "${{ secrets.PRIVATE_KEY }}" > ~/.ssh/id_rsa
+      #     chmod 600 ~/.ssh/id_rsa
+      #     echo "${{ secrets.PUBLIC_KEY }}" > ~/.ssh/id_rsa.pub
+      #     chmod 644 ~/.ssh/id_rsa.pub
+
+      #     # Add server to known hosts
+      #     ssh-keyscan -H borrmann.dev >> ~/.ssh/known_hosts
+
+      #     # Create SSH tunnel to K3s API server
+      #     ssh -f -N -o StrictHostKeyChecking=no -o ConnectTimeout=30 -o ServerAliveInterval=60 -L 6443:127.0.0.1:6443 github@borrmann.dev
+
+      #     # Create kubeconfig from secret and modify to use tunnel
+      #     echo "${{ secrets.KUBE_CONFIG }}" | base64 -d > kubeconfig
+      #     sed -i 's|https://.*:6443|https://127.0.0.1:6443|g' kubeconfig
+      #     export KUBECONFIG=kubeconfig
+
+      #     # Wait for tunnel to establish
+      #     sleep 3
+
+      #     # Test connection
+      #     kubectl cluster-info
+
+      #     # Install/upgrade the application
+      #     helm upgrade --install soundbored helm/ \
+      #       --namespace soundbored \
+      #       --create-namespace \
+      #       --wait \
+      #       --timeout=5m
+
+      #     # Force restart deployment to pick up new image
+      #     kubectl rollout restart deployment/soundbored -n soundbored
+      #     kubectl rollout status deployment/soundbored -n soundbored --timeout=300s
+
+      # - name: Cleanup
+      #   if: always()
+      #   run: |
+      #     # Kill SSH tunnel
+      #     pkill -f "ssh.*-L 6443:127.0.0.1:6443" || true
+
+      #     # Clean up files
+      #     rm -f kubeconfig ~/.ssh/id_rsa ~/.ssh/id_rsa.pub
