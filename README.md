@@ -1,188 +1,268 @@
 # Soundbored
-[![Coverage Status](https://coveralls.io/repos/github/christomitov/soundbored/badge.svg?branch=main)](https://coveralls.io/github/christomitov/soundbored?branch=main)
-[![Build Status](https://github.com/christomitov/soundbored/workflows/CI%2FCD%20Pipeline/badge.svg)](https://github.com/christomitov/soundbored/actions)
 
-Soundbored is an unlimited, no-cost, self-hosted soundboard for Discord. It allows you to play sounds in a voice channel.
+> **Fork of [christomitov/soundbored](https://github.com/christomitov/soundbored)** - Original project with 230+ stars ⭐
 
-[Hexdocs](https://christomitov.github.io/soundbored/)
+A self-hosted Discord soundboard for playing sounds in voice channels. Unlimited sounds, no cost, full control.
 
-<img width="1468" alt="Screenshot 2025-01-18 at 1 26 07 PM" src="https://github.com/user-attachments/assets/4a504100-5ef9-47bc-b406-35b67837e116" />
+This fork adds Kubernetes/Helm deployment support and CI/CD via GitHub Actions.
 
-### CLI Companion
-Install the cross-platform CLI with `npm i -g soundbored` for quick automation. Source: [christomitov/soundbored-cli](https://github.com/christomitov/soundbored-cli).
+<img width="1468" alt="Soundbored Screenshot" src="https://github.com/user-attachments/assets/4a504100-5ef9-47bc-b406-35b67837e116" />
 
-## Quickstart
+## Features
 
-1. Copy the sample environment and set the minimum values:
-   ```bash
-   cp .env.example .env
-   # Required for local testing
-   # DISCORD_TOKEN=...
-   # DISCORD_CLIENT_ID=...
-   # DISCORD_CLIENT_SECRET=...
-   # API_TOKEN=choose_a_secret
-   # PHX_HOST=localhost
-   # SCHEME=http
-   ```
-2. Run the published container:
-   ```bash
-   docker run -d -p 4000:4000 --env-file ./.env christom/soundbored
-   ```
-3. Visit http://localhost:4000, invite the bot, and trigger your first sound.
+- 🎵 Upload and play sounds in Discord voice channels
+- 🏷️ Tag-based organization and search
+- ⭐ Personal favorites per user
+- 📊 Play statistics and leaderboards
+- 🔔 Join/leave sounds per user
+- 🔐 Discord OAuth authentication
+- 🌐 REST API for external integrations
+- 👥 Multi-user support
 
-> Create the bot in the [Discord Developer Portal](https://discord.com/developers/applications), enable **Presence**, **Server Members**, and **Message Content** intents, and grant Send Messages, Read History, View Channels, Connect, and Speak permissions when you invite it.
+## Quick Start
 
-### Discord App Setup
+### Option 1: Docker (Simplest)
 
-1. In the Discord Developer Portal, open your application and go to **Bot** → enable **Presence**, **Server Members**, and **Message Content** intents.
-2. Still in the portal, go to **OAuth2 → Redirects** and add every URL that will serve Soundbored to the **Redirects** list. For example:
-   - `http://localhost:4000/auth/discord/callback` (local development)
-   - `https://your.domain.com/auth/discord/callback` (production, replace with your domain)
-   Discord requires the redirect in your app configuration to match exactly what the browser uses during login; otherwise, OAuth will fail.
-3. Copy the **Client ID** and **Client Secret** from the same page—add them to your `.env` file as `DISCORD_CLIENT_ID` and `DISCORD_CLIENT_SECRET`.
-4. Use **OAuth2 → URL Generator** (scope `bot`) to produce the invite link with the permissions listed above.
+```bash
+# 1. Create environment file
+cp .env.example .env
+# Edit .env with your Discord credentials
+
+# 2. Run container
+docker run -d -p 4000:4000 --env-file ./.env ghcr.io/borrmann-dev/soundbored
+```
+
+### Option 2: Kubernetes with Helm
+
+```bash
+# 1. Clone and configure secrets
+cp helm/secrets.yaml.example helm/secrets.yaml
+# Edit helm/secrets.yaml with your Discord credentials
+
+# 2. Install
+./helm/install.sh
+
+# 3. Upgrade (after changes)
+./helm/upgrade.sh
+
+# 4. Uninstall
+./helm/uninstall.sh
+```
+
+## Discord Setup
+
+### 1. Create Discord Application
+
+1. Go to [Discord Developer Portal](https://discord.com/developers/applications)
+2. Click **New Application** and give it a name
+
+### 2. Configure Bot
+
+1. Go to **Bot** section
+2. Click **Reset Token** and copy the token → `DISCORD_TOKEN`
+3. Enable **Privileged Gateway Intents**:
+   - ✅ **PRESENCE INTENT**
+   - ✅ **SERVER MEMBERS INTENT**
+   - ✅ **MESSAGE CONTENT INTENT**
+
+### 3. Configure OAuth2
+
+1. Go to **OAuth2** section
+2. Copy **Client ID** → `DISCORD_CLIENT_ID`
+3. Click **Reset Secret** and copy → `DISCORD_CLIENT_SECRET`
+4. Add **Redirect URL**:
+   - Local: `http://localhost:4000/auth/discord/callback`
+   - Production: `https://your-domain.com/auth/discord/callback`
+
+### 4. Invite Bot to Server
+
+1. Go to **OAuth2** → **URL Generator**
+2. Select **Guild Install**
+3. Scope: `bot`
+4. Bot Permissions:
+   - ✅ Send Messages
+   - ✅ Read Message History
+   - ✅ View Channels
+   - ✅ Connect
+   - ✅ Speak
+5. Copy URL → Open in browser → Select server → Authorize
+
+## Usage
+
+### Bot Commands
+
+| Command | Action |
+|---------|--------|
+| `!join` | Bot joins your voice channel |
+| `!leave` | Bot leaves voice channel |
+
+### Web Interface
+
+1. Visit your Soundbored URL
+2. Login with Discord
+3. Upload sounds (MP3, WAV, OGG, M4A up to 25MB)
+4. Click any sound to play in Discord voice channel
+
+### Features
+
+- **Search**: Filter sounds by name
+- **Tags**: Click tags to filter, add tags to organize
+- **Favorites**: Star sounds for quick access at `/favorites`
+- **Stats**: View play statistics at `/stats`
+- **Settings**: Manage API tokens at `/settings`
+- **Random**: Play a random sound (respects current filters)
+- **Stop**: Stop all playing sounds
+
+## Environment Variables
+
+| Variable | Required | Description |
+|----------|----------|-------------|
+| `DISCORD_TOKEN` | ✅ | Bot token from Discord Developer Portal |
+| `DISCORD_CLIENT_ID` | ✅ | OAuth Client ID |
+| `DISCORD_CLIENT_SECRET` | ✅ | OAuth Client Secret |
+| `SECRET_KEY_BASE` | ✅ | Session encryption key (`openssl rand -base64 48`) |
+| `PHX_HOST` | ✅ | Your domain (e.g., `soundbored.example.com`) |
+| `SCHEME` | ✅ | `http` or `https` |
+| `PHX_SERVER` | ✅ | Set to `true` in production |
+| `AUTO_JOIN` | ❌ | `true` to auto-join voice channels |
+| `BASIC_AUTH_USERNAME` | ❌ | HTTP basic auth username |
+| `BASIC_AUTH_PASSWORD` | ❌ | HTTP basic auth password |
+
+## Deployment Options
+
+### Docker Compose
+
+```bash
+docker compose up -d
+```
+
+Uses `.env` file for configuration. Volume mounts for persistent storage.
+
+### Kubernetes (Helm)
+
+The `helm/` directory contains a complete Helm chart:
+
+```
+helm/
+├── values.yaml          # Configuration
+├── secrets.yaml         # Secrets (gitignored!)
+├── secrets.yaml.example # Secrets template
+├── install.sh           # Install script
+├── upgrade.sh           # Upgrade script
+├── uninstall.sh         # Uninstall script
+└── templates/           # K8s manifests
+```
+
+**Prerequisites:**
+- Kubernetes cluster with NGINX Ingress
+- cert-manager for TLS (optional)
+- `local-path` storage class
+
+**Installation:**
+
+```bash
+# Configure secrets
+cp helm/secrets.yaml.example helm/secrets.yaml
+vim helm/secrets.yaml
+
+# Install (auto-detects secrets.yaml)
+./helm/install.sh
+
+# Check status
+kubectl get pods -n soundbored
+kubectl logs -n soundbored deployment/soundbored
+```
+
+### CI/CD (GitHub Actions)
+
+The `.github/workflows/ci-cd.yml` pipeline:
+
+1. Runs tests (`mix format`, `mix credo`, `mix test`)
+2. Builds Docker image → pushes to GHCR
+3. Deploys to Kubernetes via Helm (optional, currently commented out)
+
+Required GitHub Secrets for deployment:
+- `PRIVATE_KEY` / `PUBLIC_KEY` - SSH keys for K8s access
+- `KUBE_CONFIG` - Base64-encoded kubeconfig
 
 ## Local Development
 
 ```bash
-mix setup        # Fetch deps, prepare DB, build assets
-mix phx.server   # or iex -S mix phx.server
+# Setup
+mix setup
+
+# Run server
+mix phx.server
+
+# Run tests
+mix test
+
+# Lint
+mix credo --strict
+mix format
 ```
-
-Useful commands:
-- `mix test` – run the test suite (coverage via `mix coveralls`).
-- `mix credo --strict` – linting.
-
-`docker compose up` also works for a containerized local run; it respects the same `.env` configuration.
-
-## Environment Variables
-
-All available keys live in `.env.example`. Configure the ones that match your setup:
-
-| Variable | Required | Purpose |
-| --- | --- | --- |
-| `DISCORD_TOKEN` | ✔ | Bot token used to play audio in voice channels. |
-| `DISCORD_CLIENT_ID` / `DISCORD_CLIENT_SECRET` | ✔ | OAuth credentials for Discord login. |
-| `API_TOKEN` | ✔ | Shared bearer token for the REST API. |
-| `SECRET_KEY_BASE` | ✔ | Signing/encryption secret; generate via `mix phx.gen.secret` or `openssl rand -base64 48`. Takes precedence over `SECRET_KEY_BASE_FILE`.|
-| `SECRET_KEY_BASE_FILE` | optional | Path to file containing signing/encryption secret (e.g. for docker secrets). Preferred for security. |
-| `PHX_HOST` | ✔ | Hostname the app advertises (`localhost` for local runs). |
-| `SCHEME` | ✔ | `http` locally, `https` in production. |
-| `BASIC_AUTH_USERNAME` / `BASIC_AUTH_PASSWORD` | optional | Protect the UI with HTTP basic auth. |
-| `AUTO_JOIN` | optional | Set to `true` to let the bot auto-join voice channels. |
-
-## Deployment
-
-The application is published to Docker Hub as `christom/soundbored`.
-
-### Simple Docker Host
-```bash
-docker pull christom/soundbored:latest
-docker run -d -p 4000:4000 --env-file ./.env christom/soundbored
-```
-If you place the container behind your own reverse proxy, set `PHX_HOST` and `SCHEME` in `.env` to match the external URL and terminate TLS in your proxy. No additional compose files are required.
-
-## Usage
-
-After inviting the bot to your server, join a voice channel and type `!join` to have the bot join the voice channel. Type `!leave` to have the bot leave. You can upload sounds to Soundbored and trigger them there and they will play in the voice channel.
-
-The bot is also able to auto-join and auto-leave voice channels. This is controlled by the `AUTO_JOIN` environment variable. Leave it unset (or `false`) to disable, or set it to `true` to have the bot join voice channels with members and auto-leave when the last user leaves.
 
 ## API
 
-The API is used to trigger sounds from other applications. It is protected by the API_TOKEN in the .env file. The API has the following endpoints:
+Trigger sounds programmatically:
 
+```bash
+# List sounds
+curl https://your-domain.com/api/sounds \
+  -H "Authorization: Bearer YOUR_API_TOKEN"
+
+# Play sound
+curl -X POST https://your-domain.com/api/sounds/123/play \
+  -H "Authorization: Bearer YOUR_API_TOKEN"
+
+# Stop all sounds
+curl -X POST https://your-domain.com/api/sounds/stop \
+  -H "Authorization: Bearer YOUR_API_TOKEN"
 ```
-# Get list of sounds to find the ID
-curl https://soundboardurl.com/api/sounds \
-  -H "Authorization: Bearer API_TOKEN"
 
-# Play a sound by ID
-curl -X POST https://soundboardurl.com/api/sounds/123/play \
-  -H "Authorization: Bearer API_TOKEN"
+Generate API tokens in the web UI at `/settings`.
+
+## Troubleshooting
+
+### "Disallowed intent(s)" Error
+
+Enable all 3 **Privileged Gateway Intents** in Discord Developer Portal → Bot.
+
+### "Invalid redirect_uri" OAuth Error
+
+Add the exact callback URL to Discord Developer Portal → OAuth2 → Redirects:
+```
+https://your-domain.com/auth/discord/callback
 ```
 
+### Bot doesn't respond to !join
 
-## Changelog
+1. Check bot has required permissions on the server
+2. Check MESSAGE CONTENT intent is enabled
+3. Check logs: `kubectl logs -n soundbored deployment/soundbored`
 
-### v1.6.0 (2025-10-01)
+### Sounds don't play
 
-#### ✨ New Features
-- New consolidated `Settings` view replaces the standalone API tokens screen and keeps token creation, revocation, and inline API examples in one place.
-- Stats dashboard adds a week picker, richer recent activity stream, and refreshed layout under the new name “Stats”.
-- “Play Random” now respects whatever filters are active, pulling from the current search results or selected tags only.
+1. Ensure bot joined voice channel (`!join`)
+2. Check bot has Connect + Speak permissions
+3. Check ffmpeg is installed (included in Docker image)
 
-#### ⚙️ Improvements
-- Shared tag components and modal tweaks streamline sound management and reduce layout shifts.
-- Navigation highlights the active page and keeps Settings aligned with the rest of the app.
-- Mobile refinements across the main board and settings eliminate horizontal scrolling and polish button spacing.
-- Basic Auth now quietly skips enforcement when credentials are not configured instead of blocking the UI.
+## Credits
 
-#### 🧪 Tests & Quality
-- Expanded LiveView coverage for the new Settings page, Stats interactions, and filtered random playback.
-- Updated CI workflow and Dependabot configuration keep coverage and dependency checks automated.
+This project is a fork of [christomitov/soundbored](https://github.com/christomitov/soundbored) by [@christomitov](https://github.com/christomitov).
 
-#### 📦 Dependencies
-- Bumped Phoenix stack and related dependencies, plus cleaned up mix configuration and docs to match the new release.
+**Original features by upstream:**
+- Phoenix/Elixir soundboard application
+- Discord bot integration via Nostrum
+- Web UI with LiveView
+- Tags, favorites, statistics
+- REST API
 
-### v1.5.0 (2025-09-14)
+**Added in this fork:**
+- Kubernetes Helm chart
+- GitHub Actions CI/CD pipeline
+- Automated deployment scripts
 
-#### ✨ New Features
-- User-scoped API tokens with DB storage (generate/revoke in Settings > API Tokens).
-- API requests authenticated via `Authorization: Bearer <token>` are attributed to the token’s user and increment stats accordingly.
-- In-app API help with copy-to-clipboard curl commands that auto-fill your site URL and token.
-- Added Settings link in the navbar for quick access.
-- Released a new CLI for easier local and CI integrations.
+## License
 
-#### ⚙️ Improvements
-- Search bar: reduced debounce to 200ms and added inline spinner while searching.
-- Recent Plays: fixed item “disappearing” by using stable DB ids and deterministic ordering; clicked items now bump to the top correctly.
-
-#### 🧪 Tests & Quality
-- Added tests for API token lifecycle, API auth with DB tokens, Basic Auth, and the Settings LiveView.
-- Coverage improved to ~96% (via mix coveralls).
-
-#### 🔁 Compatibility
-- Legacy env `API_TOKEN` remains supported for a transition period (logs deprecation); DB tokens are the preferred path going forward.
-
-### v1.4.0 (2025-08-22)
-
-#### 🐛 Bug Fixes
-- Fixed sounds not playing due to Discord API changes
-- Optimized audio playback for faster sound loading and playback
-
-#### 🔧 Maintenance
-- Updated all dependencies to latest versions
-
-### v1.3.0 (2025-02-18)
-
-#### ✨ New Features
-- Added API to get and trigger sounds.
-- Added "stop all sounds" button.
-- Implemented auto leave and join voice channels.
-- Sorting sounds alphabetically
-- Added ability to disable basic auth (just comment out BASIC_AUTH_USERNAME and BASIC_AUTH_PASSWORD in .env)
-
-### v1.2.0 (2025-01-18)
-
-#### ✨ New Features
-- Added random sound button.
-- Added ability to add and trigger sounds from a URL.
-- Allow ability to click tags inside sound Cards for filtering.
-- Show what user uploaded a sound in the sound Card.
-
-#### 🐛 Bug Fixes
-- Fixed bug where if you uploaded a sound and edited its name before uploading a file it would crash.
-- Fixed bug where changing an uploaded sound name created a new sound in entry and didn't update the old.
-
-### v1.1.0 (2025-01-12)
-
-#### ✨ New Features
-- Implemented join/leave sound notifications
-- Added Discord avatar support for member profiles
-- Added week selector functionality to statistics page
-
-#### 🐛 Bug Fixes
-- Fixed mobile menu navigation issues on statistics page
-- Fixed statistics page not updating in realtime
-- Fixed styling issues on stats page
+MIT

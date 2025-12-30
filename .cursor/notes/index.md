@@ -10,6 +10,7 @@ A self-hosted Discord soundboard app built with Phoenix/Elixir (forked from chri
 - **Discord Bot**: Nostrum library
 - **Styling**: Tailwind CSS + Heroicons
 - **Auth**: Discord OAuth (Ueberauth)
+- **Deployment**: Kubernetes (K3s) via Helm + GitHub Actions CI/CD
 
 ## Key Directories
 
@@ -24,13 +25,13 @@ A self-hosted Discord soundboard app built with Phoenix/Elixir (forked from chri
 | `priv/repo/migrations/` | Ecto migrations |
 | `priv/static/uploads/` | Sound files + SQLite DB (in production) |
 | `test/` | ExUnit tests mirroring lib structure |
-| `.github/workflows/` | CI/CD pipeline (from k3s-demo - **needs updating**) |
-| `helm/` | Kubernetes Helm chart (**needs updating for soundbored**) |
+| `.github/workflows/` | CI/CD pipeline |
+| `helm/` | Kubernetes Helm chart |
 
 ## Notes Files
 
 - [architecture.md](architecture.md) - Core modules, OTP supervision tree, key patterns
-- [deployment.md](deployment.md) - Docker, Helm, CI/CD configuration and required updates
+- [deployment.md](deployment.md) - Docker, Helm, CI/CD, troubleshooting
 
 ## Quick Reference
 
@@ -44,12 +45,12 @@ mix format         # Format code
 mix coveralls      # Coverage report
 ```
 
-### Required Environment Variables
-- `DISCORD_TOKEN` - Bot token
-- `DISCORD_CLIENT_ID`, `DISCORD_CLIENT_SECRET` - OAuth
-- `API_TOKEN` - REST API auth (legacy, prefer DB tokens)
-- `SECRET_KEY_BASE` or `SECRET_KEY_BASE_FILE` - Session encryption
-- `PHX_HOST`, `SCHEME` - URL config
+### Helm Scripts
+```bash
+./helm/install.sh    # Install (auto-uses secrets.yaml)
+./helm/upgrade.sh    # Upgrade + restart pods
+./helm/uninstall.sh  # Uninstall (prompts for PVC/namespace deletion)
+```
 
 ### Key LiveView Routes
 - `/` - Main soundboard (SoundboardLive)
@@ -57,11 +58,6 @@ mix coveralls      # Coverage report
 - `/favorites` - User favorites (FavoritesLive)
 - `/settings` - API tokens (SettingsLive)
 
-## Forked Repo Notes
-
-This repo was forked and `.github/` and `helm/` folders were added from a K3s CI/CD demo project. These need adaptation:
-
-1. **Helm Chart** (`helm/`): References `k3s-ci-demo`, uses port 80 (should be 4000), missing env vars
-2. **CI/CD** (`.github/workflows/ci-cd.yml`): Deploys to wrong namespace/app name, missing Elixir build step
-
-See [deployment.md](deployment.md) for detailed migration checklist.
+### Discord Bot Commands
+- `!join` - Bot joins your voice channel
+- `!leave` - Bot leaves voice channel

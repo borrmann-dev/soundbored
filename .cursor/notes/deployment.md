@@ -2,76 +2,135 @@
 
 ## Docker
 
-### Dockerfile
-- Multi-stage build: Elixir 1.19-alpine
-- Build stage: compiles deps, assets
-- Runtime: includes ffmpeg (required for Nostrum audio)
-- Exposes port 4000
-- Entrypoint runs migrations then starts Phoenix
+- **Image**: `ghcr.io/borrmann-dev/soundbored` (or `christom/soundbored`)
+- **Base**: Elixir 1.19-alpine with ffmpeg
+- **Port**: 4000
+- **Volume**: `/app/priv/static/uploads` (sounds + SQLite DB)
 
-### docker-compose.yml
-- Uses `christom/soundbored:latest` image (or build locally)
-- Mounts volume for uploads + DB: `/app/priv/static/uploads`
-- Reads `.env` for configuration
-- Secret file for `SECRET_KEY_BASE_FILE`
-- Runs as non-root user (9999:9999)
+## Helm Chart
 
-## Kubernetes Deployment
-
-### Helm Chart Structure
-
+### Structure
 ```
 helm/
-├── Chart.yaml           # App metadata (soundbored v1.7.0)
-├── values.yaml          # Configuration values
+├── Chart.yaml           # App metadata
+├── values.yaml          # Non-sensitive config
+├── secrets.yaml         # Sensitive config (gitignored!)
+├── secrets.yaml.example # Template for secrets
+├── install.sh           # Install script (auto-uses secrets.yaml)
+├── upgrade.sh           # Upgrade script
+├── uninstall.sh         # Uninstall script
 └── templates/
     ├── deployment.yaml  # Pod spec with env vars, probes, volumes
     ├── service.yaml     # ClusterIP service (port 80 → 4000)
     ├── ingress.yaml     # NGINX ingress with TLS
-    └── pvc.yaml         # Persistent storage for uploads + SQLite
+    ├── pvc.yaml         # PersistentVolumeClaim (local-path, 5Gi)
+    └── secret.yaml      # Kubernetes Secret from values
 ```
 
-### CI/CD Pipeline (`.github/workflows/ci-cd.yml`)
-
-1. **Test job**: Runs `mix format`, `mix credo`, `mix test`
-2. **Build job**: Builds Docker image → pushes to `ghcr.io/borrmann-dev/soundbored`
-3. **Deploy job**: SSH tunnel to K3s → Helm upgrade → rollout restart
-
-### Pre-Deployment Setup
-
-Create the Kubernetes secret with Discord credentials:
-
+### Install/Upgrade
 ```bash
-kubectl create namespace soundbored
+# Copy and fill secrets
+cp helm/secrets.yaml.example helm/secrets.yaml
+# Edit helm/secrets.yaml with your values
 
-kubectl create secret generic soundbored-secrets -n soundbored \
-  --from-literal=DISCORD_TOKEN=your_bot_token \
-  --from-literal=DISCORD_CLIENT_ID=your_client_id \
-  --from-literal=DISCORD_CLIENT_SECRET=your_client_secret \
-  --from-literal=SECRET_KEY_BASE=$(openssl rand -base64 48)
+# Install (auto-detects secrets.yaml)
+./helm/install.sh
+
+# Upgrade
+./helm/upgrade.sh
 ```
+
+### Required Secrets (in `helm/secrets.yaml`)
+```yaml
+secrets:
+  DISCORD_TOKEN: "bot-token-from-discord-portal"
+  DISCORD_CLIENT_ID: "oauth-client-id"
+  DISCORD_CLIENT_SECRET: "oauth-client-secret"
+  SECRET_KEY_BASE: "generate-with-openssl-rand-base64-48"
+  BASIC_AUTH_USERNAME: ""  # optional
+  BASIC_AUTH_PASSWORD: ""  # optional
+```
+
+## CI/CD Pipeline
+
+### Workflow (`.github/workflows/ci-cd.yml`)
+1. **Test job**: `mix format`, `mix credo`, `mix test`
+2. **Build job**: Docker build → push to GHCR
+3. **Deploy job**: SSH tunnel → Helm upgrade (currently commented out)
 
 ### GitHub Secrets Required
-
 | Secret | Purpose |
 |--------|---------|
 | `PRIVATE_KEY` | SSH private key for K3s access |
 | `PUBLIC_KEY` | SSH public key |
 | `KUBE_CONFIG` | Base64-encoded kubeconfig |
 
-### Discord OAuth Setup
+## Discord Setup
 
-Add redirect URL in Discord Developer Portal:
+### 1. Create Application
+1. Go to [Discord Developer Portal](https://discord.com/developers/applications)
+2. Create New Application
+
+### 2. Configure Bot
+1. Go to **Bot** section
+2. Copy **Token** → `DISCORD_TOKEN`
+3. Enable **Privileged Gateway Intents**:
+   - ✅ PRESENCE INTENT
+   - ✅ SERVER MEMBERS INTENT
+   - ✅ MESSAGE CONTENT INTENT
+
+### 3. Configure OAuth2
+1. Go to **OAuth2** section
+2. Copy **Client ID** → `DISCORD_CLIENT_ID`
+3. Copy **Client Secret** → `DISCORD_CLIENT_SECRET`
+4. Add **Redirect URL**: `https://soundbored.k8s.borrmann.dev/auth/discord/callback`
+
+### 4. Invite Bot to Server
+1. Go to **OAuth2** → **URL Generator**
+2. Select **Guild Install**
+3. Scope: `bot`
+4. Permissions: `Send Messages`, `Read Message History`, `View Channels`, `Connect`, `Speak`
+5. Open generated URL → Select server → Authorize
+
+## Troubleshooting
+
+### "Disallowed intent(s)" Error
+```
+Shard websocket closed (errno 4014, reason "Disallowed intent(s).")
+```
+**Fix**: Enable all 3 Privileged Gateway Intents in Discord Developer Portal → Bot
+
+### "Invalid redirect_uri" OAuth Error
+**Fix**: Add exact callback URL to Discord Developer Portal → OAuth2 → Redirects:
 ```
 https://soundbored.k8s.borrmann.dev/auth/discord/callback
 ```
 
-## Production Checklist
+### SECRET_KEY_BASE Missing
+**Fix**: Ensure `helm/secrets.yaml` has `SECRET_KEY_BASE` set and was included during install:
+```bash
+./helm/upgrade.sh  # Auto-includes secrets.yaml
+```
 
-- [x] Helm chart configured for soundbored
-- [x] CI/CD workflow with tests and deployment
-- [x] PersistentVolumeClaim for uploads
-- [ ] Create K8s namespace and secrets on cluster
-- [ ] Configure DNS for ingress host
-- [ ] Add Discord OAuth redirect URL
+### Check Logs
+```bash
+kubectl logs -n soundbored deployment/soundbored --tail=100
+kubectl logs -n soundbored deployment/soundbored | head -50  # Startup logs
+```
 
+### Restart Pod
+```bash
+kubectl rollout restart deployment/soundbored -n soundbored
+```
+
+## Security Notes
+
+### Never Commit Secrets!
+- `helm/secrets.yaml` is in `.gitignore`
+- GitHub push protection blocks Discord tokens
+- If secrets are exposed: **regenerate immediately**
+
+### Regenerate Secrets
+1. **Discord Token**: Developer Portal → Bot → Reset Token
+2. **Client Secret**: Developer Portal → OAuth2 → Reset Secret
+3. **SECRET_KEY_BASE**: `openssl rand -base64 48`
