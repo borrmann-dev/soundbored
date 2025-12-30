@@ -35,4 +35,3 @@ else
 fi
 
 echo "Uninstall complete!"
-
