@@ -5,7 +5,6 @@ on:
     branches: [main, master]
     paths-ignore:
       - "helm/**"
-      - ".github/**"
       - ".cursor/**"
       - "AGENTS.md"
       - "README.md"
@@ -13,7 +12,6 @@ on:
     branches: [main, master]
     paths-ignore:
       - "helm/**"
-      - ".github/**"
       - ".cursor/**"
       - "AGENTS.md"
       - "README.md"
