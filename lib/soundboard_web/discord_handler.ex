@@ -318,7 +318,9 @@ defmodule SoundboardWeb.DiscordHandler do
     join_cmd = "#{prefix}join"
     leave_cmd = "#{prefix}leave"
 
-    Logger.debug("MESSAGE_CREATE: '#{msg.content}' | Expected join: '#{join_cmd}' | Match: #{msg.content == join_cmd}")
+    Logger.debug(
+      "MESSAGE_CREATE: '#{msg.content}' | Expected join: '#{join_cmd}' | Match: #{msg.content == join_cmd}"
+    )
 
     case msg.content do
       ^join_cmd ->
@@ -334,7 +336,8 @@ defmodule SoundboardWeb.DiscordHandler do
               scheme = System.get_env("SCHEME")
 
               web_url =
-                Application.get_env(:soundboard, SoundboardWeb.Endpoint)[:url][:host] || "localhost"
+                Application.get_env(:soundboard, SoundboardWeb.Endpoint)[:url][:host] ||
+                  "localhost"
 
               url = "#{scheme}://#{web_url}"
 
