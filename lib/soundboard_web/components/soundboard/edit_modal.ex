@@ -80,7 +80,7 @@ defmodule SoundboardWeb.Components.Soundboard.EditModal do
                 <input type="hidden" name="sound_id" value={@current_sound.id} />
                 <input type="hidden" name="source_type" value={@current_sound.source_type} />
                 <input type="hidden" name="url" value={@current_sound.url} />
-
+                
     <!-- Display current source type (non-editable) -->
                 <div class="mb-4 text-left">
                   <label class="block text-sm font-medium text-gray-500 dark:text-gray-400">
@@ -94,7 +94,7 @@ defmodule SoundboardWeb.Components.Soundboard.EditModal do
                     <% end %>
                   </div>
                 </div>
-
+                
     <!-- Name Input with error message -->
                 <div class="mb-4">
                   <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 text-left">
@@ -136,7 +136,7 @@ defmodule SoundboardWeb.Components.Soundboard.EditModal do
                   data-preview-src={preview_src}
                   preview_disabled={is_nil(preview_src) or preview_src == ""}
                 />
-
+                
     <!-- Tags -->
                 <div class="text-left">
                   <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -144,7 +144,7 @@ defmodule SoundboardWeb.Components.Soundboard.EditModal do
                   </label>
                   <TagComponents.tag_badge_list tags={@current_sound.tags} remove_event="remove_tag" />
                 </div>
-
+                
     <!-- Tag Input -->
                 <div class="mt-2 relative">
                   <div>
@@ -173,8 +173,8 @@ defmodule SoundboardWeb.Components.Soundboard.EditModal do
                     select_event="select_tag"
                   />
                 </div>
-
-                <!-- Keywords (Search Terms) -->
+                
+    <!-- Keywords (Search Terms) -->
                 <div class="mt-4 text-left">
                   <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
                     Keywords <span class="text-gray-400 font-normal">(alternative search terms)</span>
@@ -195,8 +195,8 @@ defmodule SoundboardWeb.Components.Soundboard.EditModal do
                     Comma-separated. These help find the sound when searching.
                   </p>
                 </div>
-
-                <!-- Sound Settings -->
+                
+    <!-- Sound Settings -->
                 <div class="mt-5 mb-4">
                   <div class="flex flex-col gap-3 text-left">
                     <% user_setting =
