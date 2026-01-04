@@ -180,9 +180,26 @@ defmodule SoundboardWeb.Live.UploadHandler do
 
   defp create_sound_with_settings(sound_params, user_id, socket) do
     with {:ok, sound} <- create_sound(sound_params, socket.assigns.upload_tags),
-         {:ok, _setting} <- create_user_setting(sound, user_id, sound_params) do
+         {:ok, _setting} <- create_user_setting(sound, user_id, sound_params),
+         :ok <- create_keywords(sound, socket.assigns[:upload_keywords] || "") do
       broadcast_updates()
       {:ok, sound}
+    end
+  end
+
+  defp create_keywords(_sound, ""), do: :ok
+
+  defp create_keywords(sound, keywords_string) when is_binary(keywords_string) do
+    keywords =
+      keywords_string
+      |> String.split(",")
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+
+    if keywords == [] do
+      :ok
+    else
+      Sound.set_keywords(sound, keywords)
     end
   end
 

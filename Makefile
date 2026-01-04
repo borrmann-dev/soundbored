@@ -15,6 +15,9 @@ help:
 	@echo "  make docker.logs - Show container logs"
 	@echo "  make docker.shell - Shell into container"
 	@echo "  make docker.test - Run tests in container"
+	@echo "  make docker.format - Format code in container"
+	@echo "  make docker.lint - Run Credo in container"
+	@echo "  make docker.ci   - Run all CI checks in container"
 	@echo ""
 	@echo "Testing & Quality:"
 	@echo "  make test        - Run tests"
@@ -68,7 +71,18 @@ docker.shell:
 	docker compose -f docker-compose.dev.yml exec soundbored /bin/sh
 
 docker.test:
-	docker compose -f docker-compose.dev.yml exec soundbored mix test
+	docker compose -f docker-compose.dev.yml run --rm -e MIX_ENV=test soundbored mix test
+
+docker.format:
+	docker compose -f docker-compose.dev.yml run --rm soundbored mix format
+
+docker.format.check:
+	docker compose -f docker-compose.dev.yml run --rm soundbored mix format --check-formatted
+
+docker.lint:
+	docker compose -f docker-compose.dev.yml run --rm soundbored mix credo --strict
+
+docker.ci: docker.format docker.lint docker.test
 
 docker.clean:
 	docker compose -f docker-compose.dev.yml down -v

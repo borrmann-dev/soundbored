@@ -76,6 +76,7 @@ defmodule SoundboardWeb.SoundboardLive do
     |> assign(:upload_tags, [])
     |> assign(:upload_tag_input, "")
     |> assign(:upload_tag_suggestions, [])
+    |> assign(:upload_keywords, "")
     |> assign(:upload_ready, false)
     |> assign(:show_delete_confirm, false)
     |> assign(:selected_tags, [])
@@ -266,6 +267,7 @@ defmodule SoundboardWeb.SoundboardLive do
          |> assign(:url, "")
          |> assign(:upload_tag_input, "")
          |> assign(:upload_tag_suggestions, [])
+         |> assign(:upload_keywords, "")
          |> assign(:is_join_sound, false)
          |> assign(:is_leave_sound, false)
          |> assign(:upload_volume, 100)
@@ -307,6 +309,7 @@ defmodule SoundboardWeb.SoundboardLive do
      |> assign(:upload_name, "")
      |> assign(:upload_tag_input, "")
      |> assign(:upload_tag_suggestions, [])
+     |> assign(:upload_keywords, "")
      |> assign(:upload_volume, 100)}
   end
 
@@ -319,6 +322,7 @@ defmodule SoundboardWeb.SoundboardLive do
      |> assign(:upload_name, "")
      |> assign(:upload_tag_input, "")
      |> assign(:upload_tag_suggestions, [])
+     |> assign(:upload_keywords, "")
      |> assign(:upload_volume, 100)}
   end
 
@@ -453,6 +457,7 @@ defmodule SoundboardWeb.SoundboardLive do
      |> assign(:upload_name, "")
      |> assign(:upload_tag_input, "")
      |> assign(:upload_tag_suggestions, [])
+     |> assign(:upload_keywords, "")
      |> assign(:upload_volume, 100)}
   end
 
@@ -469,6 +474,7 @@ defmodule SoundboardWeb.SoundboardLive do
      |> assign(:upload_name, "")
      |> assign(:upload_tag_input, "")
      |> assign(:upload_tag_suggestions, [])
+     |> assign(:upload_keywords, "")
      |> assign(:upload_volume, 100)}
   end
 
