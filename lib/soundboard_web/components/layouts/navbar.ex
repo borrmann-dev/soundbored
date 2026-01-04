@@ -35,7 +35,7 @@ defmodule SoundboardWeb.Components.Layouts.Navbar do
                 Favorites
               </.nav_link>
               <.nav_link navigate="/my-sounds" active={current_page?(@current_path, "/my-sounds")}>
-                Meine
+                My Sounds
               </.nav_link>
               <.nav_link navigate="/stats" active={current_page?(@current_path, "/stats")}>
                 Stats
@@ -138,7 +138,7 @@ defmodule SoundboardWeb.Components.Layouts.Navbar do
             Favorites
           </.mobile_nav_link>
           <.mobile_nav_link navigate="/my-sounds" active={current_page?(@current_path, "/my-sounds")}>
-            Meine Sounds
+            My Sounds
           </.mobile_nav_link>
           <.mobile_nav_link navigate="/stats" active={current_page?(@current_path, "/stats")}>
             Stats

@@ -1,8 +1,8 @@
 <div class="max-w-6xl mx-auto px-4 py-8">
   <div class="flex justify-between items-center mb-4">
-    <h1 class="text-3xl font-bold text-gray-800 dark:text-gray-100">Meine Sounds</h1>
+    <h1 class="text-3xl font-bold text-gray-800 dark:text-gray-100">My Sounds</h1>
     <div class="text-sm text-gray-600 dark:text-gray-400">
-      {length(@my_sounds)} Sounds
+      {length(@my_sounds)} sounds
     </div>
   </div>
 
@@ -11,23 +11,23 @@
       <div class="flex flex-col items-center justify-center py-16">
         <div class="text-6xl mb-4">🎵</div>
         <h3 class="text-xl font-medium text-gray-900 dark:text-gray-100 mb-2">
-          Du hast noch keine Sounds hochgeladen
+          You haven't uploaded any sounds yet
         </h3>
         <p class="text-gray-500 dark:text-gray-400">
-          Gehe zur <a href="/" class="text-blue-500 hover:underline">Hauptseite</a>
-          um Sounds hochzuladen
+          Go to the <a href="/" class="text-blue-500 hover:underline">main page</a>
+          to upload sounds
         </p>
       </div>
     <% else %>
       <!-- Search Bar -->
-      <div class="mb-4">
+      <div class="mt-4 mb-4">
         <form phx-change="search" phx-submit="search">
           <div class="relative">
             <input
               type="text"
               name="query"
               value={@search_query}
-              placeholder="Suche in meinen Sounds..."
+              placeholder="Search my sounds..."
               class="w-full px-4 py-2 pl-10 rounded-lg border border-gray-300 dark:border-gray-600 
                      bg-white dark:bg-gray-800 text-gray-900 dark:text-gray-100
                      focus:ring-2 focus:ring-blue-500 focus:border-transparent"
@@ -64,17 +64,17 @@
 
       <% filtered = filtered_sounds(assigns) %>
       <div class="text-sm text-gray-600 dark:text-gray-400 mb-2">
-        {length(filtered)} von {length(@my_sounds)} Sounds
+        {length(filtered)} of {length(@my_sounds)} sounds
       </div>
 
       <%= if filtered == [] do %>
         <div class="flex flex-col items-center justify-center py-16">
           <div class="text-4xl mb-4">🔍</div>
           <h3 class="text-xl font-medium text-gray-900 dark:text-gray-100 mb-2">
-            Keine Treffer
+            No results
           </h3>
           <p class="text-gray-500 dark:text-gray-400">
-            Versuche einen anderen Suchbegriff oder entferne den Tag-Filter
+            Try a different search term or remove the tag filter
           </p>
         </div>
       <% else %>
@@ -92,8 +92,15 @@
               </button>
 
               <div class="relative z-10 p-4 flex flex-col min-h-[120px] pointer-events-none">
-                <div class="text-gray-800 dark:text-gray-200 font-medium break-all">
-                  {display_name(sound.filename)}
+                <div class="flex-1 min-w-0">
+                  <div class="text-gray-800 dark:text-gray-200 font-medium break-all">
+                    {display_name(sound.filename)}
+                  </div>
+                  <%= if sound.user && sound.user.username do %>
+                    <div class="text-xs text-gray-500 dark:text-gray-400">
+                      Uploaded by {sound.user.username}
+                    </div>
+                  <% end %>
                 </div>
 
                 <div class="mt-auto pt-2 flex justify-between items-center">
@@ -163,6 +170,27 @@
                         <.icon name="hero-heart" class="w-4 h-4" />
                       <% end %>
                     </button>
+                    <button
+                      phx-click="edit"
+                      phx-value-id={sound.id}
+                      class="relative flex items-center justify-center w-8 h-8 text-gray-400 hover:text-blue-600 
+                             dark:text-gray-500 dark:hover:text-blue-400 rounded-md"
+                    >
+                      <svg
+                        xmlns="http://www.w3.org/2000/svg"
+                        fill="none"
+                        viewBox="0 0 24 24"
+                        stroke-width="1.5"
+                        stroke="currentColor"
+                        class="w-4 h-4"
+                      >
+                        <path
+                          stroke-linecap="round"
+                          stroke-linejoin="round"
+                          d="m16.862 4.487 1.687-1.688a1.875 1.875 0 1 1 2.652 2.652L10.582 16.07a4.5 4.5 0 0 1-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 0 1 1.13-1.897l8.932-8.931Zm0 0L19.5 7.125M18 14v4.75A2.25 2.25 0 0 1 15.75 21H5.25A2.25 2.25 0 0 1 3 18.75V8.25A2.25 2.25 0 0 1 5.25 6H10"
+                        />
+                      </svg>
+                    </button>
                   </div>
                 </div>
               </div>
@@ -174,8 +202,21 @@
   <% else %>
     <div class="text-center py-12">
       <p class="text-gray-600 dark:text-gray-400">
-        Bitte einloggen um deine Sounds zu sehen
+        Please log in to see your sounds
       </p>
     </div>
+  <% end %>
+
+  <%= if @show_modal do %>
+    <.edit_modal
+      flash={@flash}
+      current_user={@current_user}
+      current_sound={@current_sound}
+      tag_input={@tag_input}
+      tag_suggestions={@tag_suggestions}
+    />
+    <%= if @show_delete_confirm do %>
+      <.delete_modal {assigns} />
+    <% end %>
   <% end %>
 </div>
