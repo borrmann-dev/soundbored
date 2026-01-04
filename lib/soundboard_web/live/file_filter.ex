@@ -30,7 +30,12 @@ defmodule SoundboardWeb.Live.FileFilter do
           String.downcase(tag.name) =~ query
         end)
 
-      filename_matches || tag_matches
+      keyword_matches =
+        Enum.any?(file.keywords || [], fn kw ->
+          String.downcase(kw.keyword) =~ query
+        end)
+
+      filename_matches || tag_matches || keyword_matches
     end)
   end
 end

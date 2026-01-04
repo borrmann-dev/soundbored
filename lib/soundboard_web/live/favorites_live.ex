@@ -39,7 +39,7 @@ defmodule SoundboardWeb.FavoritesLive do
       sounds_with_tags =
         Sound.with_tags()
         |> Repo.all()
-        |> Repo.preload([:user, user_sound_settings: [:user]])
+        |> Repo.preload([:user, :keywords, user_sound_settings: [:user]])
         |> Enum.filter(&(&1.id in favorites))
         |> Enum.sort_by(&String.downcase(&1.filename))
 
@@ -97,7 +97,7 @@ defmodule SoundboardWeb.FavoritesLive do
             sounds_with_tags =
               Sound.with_tags()
               |> Repo.all()
-              |> Repo.preload([:user, user_sound_settings: [:user]])
+              |> Repo.preload([:user, :keywords, user_sound_settings: [:user]])
               |> Enum.filter(&(&1.id in favorites))
               |> Enum.sort_by(&String.downcase(&1.filename))
 
@@ -354,7 +354,7 @@ defmodule SoundboardWeb.FavoritesLive do
       sounds_with_tags =
         Sound.with_tags()
         |> Repo.all()
-        |> Repo.preload([:user, user_sound_settings: [:user]])
+        |> Repo.preload([:user, :keywords, user_sound_settings: [:user]])
         |> Enum.filter(&(&1.id in favorites))
         |> Enum.sort_by(&String.downcase(&1.filename))
 
@@ -381,7 +381,7 @@ defmodule SoundboardWeb.FavoritesLive do
         sounds_with_tags =
           Sound.with_tags()
           |> Repo.all()
-          |> Repo.preload([:user, user_sound_settings: [:user]])
+          |> Repo.preload([:user, :keywords, user_sound_settings: [:user]])
           |> Enum.filter(&(&1.id in favorites))
           |> Enum.sort_by(&String.downcase(&1.filename))
 
@@ -404,7 +404,7 @@ defmodule SoundboardWeb.FavoritesLive do
       sounds_with_tags =
         Sound.with_tags()
         |> Repo.all()
-        |> Repo.preload([:user, user_sound_settings: [:user]])
+        |> Repo.preload([:user, :keywords, user_sound_settings: [:user]])
         |> Enum.filter(&(&1.id in favorites))
         |> Enum.sort_by(&String.downcase(&1.filename))
 
@@ -437,6 +437,7 @@ defmodule SoundboardWeb.FavoritesLive do
       case Sound.changeset(db_sound, sound_params) |> Repo.update() do
         {:ok, updated_sound} ->
           update_user_settings(db_sound, user_id, params)
+          update_keywords(updated_sound, params)
           SoundboardWeb.AudioPlayer.invalidate_cache(db_sound.filename)
           SoundboardWeb.AudioPlayer.invalidate_cache(updated_sound.filename)
           maybe_rename_file(db_sound, old_path, new_path, new_filename)
@@ -448,6 +449,18 @@ defmodule SoundboardWeb.FavoritesLive do
       end
     end)
   end
+
+  defp update_keywords(sound, %{"keywords" => keywords_string}) when is_binary(keywords_string) do
+    keywords =
+      keywords_string
+      |> String.split(",")
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+
+    Sound.set_keywords(sound, keywords)
+  end
+
+  defp update_keywords(_sound, _params), do: :ok
 
   defp maybe_rename_file(sound, old_path, new_path, new_filename) do
     if sound.source_type == "local" && sound.filename != new_filename && File.exists?(old_path) do

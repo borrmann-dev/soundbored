@@ -18,6 +18,7 @@ defmodule Soundboard.Sound do
     field :volume, :float, default: 1.0
     belongs_to :user, Soundboard.Accounts.User
     has_many :user_sound_settings, Soundboard.UserSoundSetting
+    has_many :keywords, Soundboard.SoundKeyword, on_replace: :delete
 
     many_to_many :tags, Soundboard.Tag,
       join_through: Soundboard.SoundTag,
@@ -75,7 +76,7 @@ defmodule Soundboard.Sound do
 
   def with_tags(query \\ __MODULE__) do
     from s in query,
-      preload: [:tags]
+      preload: [:tags, :keywords]
   end
 
   def by_tag(query \\ __MODULE__, tag_name) do
@@ -156,8 +157,52 @@ defmodule Soundboard.Sound do
     |> Repo.get!(id)
     |> Repo.preload([
       :tags,
+      :keywords,
       :user,
       user_sound_settings: [user: []]
     ])
+  end
+
+  @doc """
+  Adds keywords to a sound. Keywords are alternative search terms.
+  """
+  def add_keyword(sound, keyword) when is_binary(keyword) do
+    keyword = String.trim(keyword) |> String.downcase()
+
+    %Soundboard.SoundKeyword{}
+    |> Soundboard.SoundKeyword.changeset(%{sound_id: sound.id, keyword: keyword})
+    |> Repo.insert()
+  end
+
+  @doc """
+  Removes a keyword from a sound.
+  """
+  def remove_keyword(sound, keyword) do
+    from(k in Soundboard.SoundKeyword,
+      where: k.sound_id == ^sound.id and k.keyword == ^keyword
+    )
+    |> Repo.delete_all()
+  end
+
+  @doc """
+  Sets all keywords for a sound, replacing existing ones.
+  """
+  def set_keywords(sound, keywords) when is_list(keywords) do
+    # Delete existing keywords
+    from(k in Soundboard.SoundKeyword, where: k.sound_id == ^sound.id)
+    |> Repo.delete_all()
+
+    # Insert new keywords
+    keywords
+    |> Enum.map(&String.trim/1)
+    |> Enum.map(&String.downcase/1)
+    |> Enum.reject(&(&1 == ""))
+    |> Enum.uniq()
+    |> Enum.each(fn kw ->
+      add_keyword(sound, kw)
+    end)
+
+    # Return updated sound
+    get_sound!(sound.id)
   end
 end

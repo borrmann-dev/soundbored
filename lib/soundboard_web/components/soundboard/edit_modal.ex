@@ -15,10 +15,10 @@ defmodule SoundboardWeb.Components.Soundboard.EditModal do
     # Add a default empty list for tags if they're not loaded
     assigns =
       assign_new(assigns, :current_sound, fn ->
-        %{tags: [], is_join_sound: false, is_leave_sound: false}
+        %{tags: [], keywords: [], is_join_sound: false, is_leave_sound: false}
       end)
 
-    # Ensure tags is a list even if not loaded
+    # Ensure tags and keywords are lists even if not loaded
     assigns =
       update(assigns, :current_sound, fn sound ->
         tags =
@@ -27,7 +27,15 @@ defmodule SoundboardWeb.Components.Soundboard.EditModal do
             _ -> []
           end
 
-        Map.put(sound, :tags, tags)
+        keywords =
+          case Map.get(sound, :keywords) do
+            keywords when is_list(keywords) -> keywords
+            _ -> []
+          end
+
+        sound
+        |> Map.put(:tags, tags)
+        |> Map.put(:keywords, keywords)
       end)
 
     # Add default assigns for validation error
@@ -72,7 +80,7 @@ defmodule SoundboardWeb.Components.Soundboard.EditModal do
                 <input type="hidden" name="sound_id" value={@current_sound.id} />
                 <input type="hidden" name="source_type" value={@current_sound.source_type} />
                 <input type="hidden" name="url" value={@current_sound.url} />
-                
+
     <!-- Display current source type (non-editable) -->
                 <div class="mb-4 text-left">
                   <label class="block text-sm font-medium text-gray-500 dark:text-gray-400">
@@ -86,7 +94,7 @@ defmodule SoundboardWeb.Components.Soundboard.EditModal do
                     <% end %>
                   </div>
                 </div>
-                
+
     <!-- Name Input with error message -->
                 <div class="mb-4">
                   <label class="block text-sm font-medium text-gray-700 dark:text-gray-300 text-left">
@@ -128,7 +136,7 @@ defmodule SoundboardWeb.Components.Soundboard.EditModal do
                   data-preview-src={preview_src}
                   preview_disabled={is_nil(preview_src) or preview_src == ""}
                 />
-                
+
     <!-- Tags -->
                 <div class="text-left">
                   <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
@@ -136,7 +144,7 @@ defmodule SoundboardWeb.Components.Soundboard.EditModal do
                   </label>
                   <TagComponents.tag_badge_list tags={@current_sound.tags} remove_event="remove_tag" />
                 </div>
-                
+
     <!-- Tag Input -->
                 <div class="mt-2 relative">
                   <div>
@@ -165,8 +173,30 @@ defmodule SoundboardWeb.Components.Soundboard.EditModal do
                     select_event="select_tag"
                   />
                 </div>
-                
-    <!-- Sound Settings -->
+
+                <!-- Keywords (Search Terms) -->
+                <div class="mt-4 text-left">
+                  <label class="block text-sm font-medium text-gray-700 dark:text-gray-300">
+                    Keywords <span class="text-gray-400 font-normal">(alternative search terms)</span>
+                  </label>
+                  <% keyword_string =
+                    @current_sound.keywords
+                    |> Enum.map(& &1.keyword)
+                    |> Enum.join(", ") %>
+                  <input
+                    type="text"
+                    name="keywords"
+                    value={keyword_string}
+                    placeholder="keyword1, keyword2, keyword3..."
+                    class="mt-1 block w-full rounded-md border-gray-300 dark:border-gray-600 shadow-sm sm:text-sm
+                           dark:bg-gray-700 dark:text-gray-100 focus:border-blue-500 focus:ring-blue-500"
+                  />
+                  <p class="mt-1 text-xs text-gray-500 dark:text-gray-400">
+                    Comma-separated. These help find the sound when searching.
+                  </p>
+                </div>
+
+                <!-- Sound Settings -->
                 <div class="mt-5 mb-4">
                   <div class="flex flex-col gap-3 text-left">
                     <% user_setting =

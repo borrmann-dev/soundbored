@@ -30,6 +30,7 @@ defmodule SoundboardWeb.SoundboardLive do
           |> Repo.all()
           |> Repo.preload([
             :tags,
+            :keywords,
             :user,
             user_sound_settings: [user: []]
           ])
@@ -679,7 +680,7 @@ defmodule SoundboardWeb.SoundboardLive do
     uploaded_files =
       Sound
       |> Repo.all()
-      |> Repo.preload([:tags, :user, user_sound_settings: [user: []]])
+      |> Repo.preload([:tags, :keywords, :user, user_sound_settings: [user: []]])
       # Ensure consistent sorting
       |> Enum.sort_by(&String.downcase(&1.filename))
 
@@ -724,7 +725,7 @@ defmodule SoundboardWeb.SoundboardLive do
     sounds =
       Sound
       |> Repo.all()
-      |> Repo.preload([:tags, :user, user_sound_settings: [user: []]])
+      |> Repo.preload([:tags, :keywords, :user, user_sound_settings: [user: []]])
       |> Enum.sort_by(&String.downcase(&1.filename))
 
     assign(socket, :uploaded_files, sounds)
@@ -849,6 +850,7 @@ defmodule SoundboardWeb.SoundboardLive do
         case Sound.changeset(db_sound, sound_params) |> Repo.update() do
           {:ok, updated_sound} ->
             updated_sound = update_user_settings(db_sound, user_id, updated_sound, params)
+            update_keywords(updated_sound, params)
             SoundboardWeb.AudioPlayer.invalidate_cache(db_sound.filename)
             SoundboardWeb.AudioPlayer.invalidate_cache(updated_sound.filename)
             updated_sound
@@ -863,6 +865,18 @@ defmodule SoundboardWeb.SoundboardLive do
       end
     end)
   end
+
+  defp update_keywords(sound, %{"keywords" => keywords_string}) when is_binary(keywords_string) do
+    keywords =
+      keywords_string
+      |> String.split(",")
+      |> Enum.map(&String.trim/1)
+      |> Enum.reject(&(&1 == ""))
+
+    Sound.set_keywords(sound, keywords)
+  end
+
+  defp update_keywords(_sound, _params), do: :ok
 
   defp handle_tag_response({:ok, updated_socket}, _socket, context) do
     {:noreply, reset_tag_assigns(updated_socket, context)}
