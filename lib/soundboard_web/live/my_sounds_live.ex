@@ -418,11 +418,7 @@ defmodule SoundboardWeb.MySoundsLive do
           update_user_settings(db_sound, user_id, params)
           SoundboardWeb.AudioPlayer.invalidate_cache(db_sound.filename)
           SoundboardWeb.AudioPlayer.invalidate_cache(updated_sound.filename)
-
-          if db_sound.source_type == "local" && db_sound.filename != new_filename do
-            if File.exists?(old_path), do: File.rename(old_path, new_path)
-          end
-
+          maybe_rename_file(db_sound, old_path, new_path, new_filename)
           Phoenix.PubSub.broadcast(Soundboard.PubSub, "soundboard", {:files_updated})
           updated_sound
 
@@ -430,6 +426,12 @@ defmodule SoundboardWeb.MySoundsLive do
           Repo.rollback(changeset)
       end
     end)
+  end
+
+  defp maybe_rename_file(sound, old_path, new_path, new_filename) do
+    if sound.source_type == "local" && sound.filename != new_filename && File.exists?(old_path) do
+      File.rename(old_path, new_path)
+    end
   end
 
   defp update_user_settings(sound, user_id, params) do
