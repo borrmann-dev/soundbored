@@ -15,14 +15,16 @@ defmodule Soundboard.Tags.TagTest do
     end
 
     test "enforces unique names" do
+      unique_name = "unique_tag_#{System.unique_integer([:positive])}"
+
       {:ok, _tag} =
-        %Tag{name: "test"}
+        %Tag{name: unique_name}
         |> Tag.changeset(%{})
         |> unique_constraint(:name)
         |> Repo.insert()
 
       {:error, changeset} =
-        %Tag{name: "test"}
+        %Tag{name: unique_name}
         |> Tag.changeset(%{})
         |> unique_constraint(:name)
         |> Repo.insert()
@@ -55,22 +57,25 @@ defmodule Soundboard.Tags.TagTest do
 
   describe "tag search" do
     setup do
-      {:ok, _} = Repo.insert(%Tag{name: "test"})
-      {:ok, _} = Repo.insert(%Tag{name: "testing"})
-      {:ok, _} = Repo.insert(%Tag{name: "other"})
-      :ok
+      suffix = System.unique_integer([:positive])
+      {:ok, tag1} = Repo.insert(%Tag{name: "searchable_#{suffix}"})
+      {:ok, tag2} = Repo.insert(%Tag{name: "searchable_extra_#{suffix}"})
+      {:ok, _} = Repo.insert(%Tag{name: "other_#{suffix}"})
+      %{tag1: tag1, tag2: tag2, suffix: suffix}
     end
 
-    test "finds tags by partial name match" do
-      results = Tag.search("test") |> Repo.all()
+    test "finds tags by partial name match", %{suffix: suffix} do
+      results = Tag.search("searchable_#{suffix}") |> Repo.all()
       assert length(results) == 2
-      assert Enum.map(results, & &1.name) |> Enum.sort() == ["test", "testing"]
+      names = Enum.map(results, & &1.name) |> Enum.sort()
+      assert names == ["searchable_#{suffix}", "searchable_extra_#{suffix}"]
     end
 
-    test "search is case insensitive" do
-      results = Tag.search("TEST") |> Repo.all()
+    test "search is case insensitive", %{suffix: suffix} do
+      results = Tag.search("SEARCHABLE_#{suffix}") |> Repo.all()
       assert length(results) == 2
-      assert Enum.map(results, & &1.name) |> Enum.sort() == ["test", "testing"]
+      names = Enum.map(results, & &1.name) |> Enum.sort()
+      assert names == ["searchable_#{suffix}", "searchable_extra_#{suffix}"]
     end
   end
 
