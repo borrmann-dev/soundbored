@@ -306,7 +306,10 @@ defmodule SoundboardWeb.FavoritesLive do
 
       sound ->
         default_percent = Volume.decimal_to_percent(sound.volume)
-        updated_sound = Map.put(sound, :volume, Volume.percent_to_decimal(volume, default_percent))
+
+        updated_sound =
+          Map.put(sound, :volume, Volume.percent_to_decimal(volume, default_percent))
+
         {:noreply, assign(socket, :current_sound, updated_sound)}
     end
   end
