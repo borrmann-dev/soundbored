@@ -324,41 +324,10 @@ defmodule SoundboardWeb.DiscordHandler do
 
     case msg.content do
       ^join_cmd ->
-        if user_allowed_to_control_bot?(msg.guild_id, msg.author.id) do
-          case get_user_voice_channel(msg.guild_id, msg.author.id) do
-            nil ->
-              Message.create(msg.channel_id, "You need to be in a voice channel!")
-
-            channel_id ->
-              join_voice_channel(msg.guild_id, channel_id)
-
-              # Send web interface URL
-              scheme = System.get_env("SCHEME")
-
-              web_url =
-                Application.get_env(:soundboard, SoundboardWeb.Endpoint)[:url][:host] ||
-                  "localhost"
-
-              url = "#{scheme}://#{web_url}"
-
-              Message.create(msg.channel_id, """
-              Joined your voice channel!
-              Access the soundboard here: #{url}
-              """)
-          end
-        else
-          Message.create(msg.channel_id, "❌ You don't have permission to control the bot.")
-        end
+        handle_join_command(msg)
 
       ^leave_cmd ->
-        if msg.guild_id do
-          if user_allowed_to_control_bot?(msg.guild_id, msg.author.id) do
-            leave_voice_channel(msg.guild_id)
-            Message.create(msg.channel_id, "Left the voice channel!")
-          else
-            Message.create(msg.channel_id, "❌ You don't have permission to control the bot.")
-          end
-        end
+        handle_leave_command(msg)
 
       _ ->
         :ignore
@@ -367,6 +336,48 @@ defmodule SoundboardWeb.DiscordHandler do
 
   def handle_event(_event) do
     :noop
+  end
+
+  defp handle_join_command(msg) do
+    if user_allowed_to_control_bot?(msg.guild_id, msg.author.id) do
+      do_join_command(msg)
+    else
+      Message.create(msg.channel_id, "❌ You don't have permission to control the bot.")
+    end
+  end
+
+  defp do_join_command(msg) do
+    case get_user_voice_channel(msg.guild_id, msg.author.id) do
+      nil ->
+        Message.create(msg.channel_id, "You need to be in a voice channel!")
+
+      channel_id ->
+        join_voice_channel(msg.guild_id, channel_id)
+        scheme = System.get_env("SCHEME")
+
+        web_url =
+          Application.get_env(:soundboard, SoundboardWeb.Endpoint)[:url][:host] || "localhost"
+
+        url = "#{scheme}://#{web_url}"
+
+        Message.create(msg.channel_id, """
+        Joined your voice channel!
+        Access the soundboard here: #{url}
+        """)
+    end
+  end
+
+  defp handle_leave_command(msg) do
+    if is_nil(msg.guild_id), do: :ignore, else: do_leave_command(msg)
+  end
+
+  defp do_leave_command(msg) do
+    if user_allowed_to_control_bot?(msg.guild_id, msg.author.id) do
+      leave_voice_channel(msg.guild_id)
+      Message.create(msg.channel_id, "Left the voice channel!")
+    else
+      Message.create(msg.channel_id, "❌ You don't have permission to control the bot.")
+    end
   end
 
   defp get_user_voice_channel(guild_id, user_id) do
@@ -576,29 +587,30 @@ defmodule SoundboardWeb.DiscordHandler do
   end
 
   defp user_has_role?(guild_id, user_id, role_name) do
-    try do
-      guild = GuildCache.get!(guild_id)
+    guild = GuildCache.get!(guild_id)
 
-      # Find the role ID by name
-      role_id =
-        Enum.find_value(guild.roles, fn {id, role} ->
-          if String.downcase(role.name) == String.downcase(role_name), do: id
-        end)
+    # Find the role ID by name
+    role_id =
+      Enum.find_value(guild.roles, fn {id, role} ->
+        if String.downcase(role.name) == String.downcase(role_name), do: id
+      end)
 
-      if role_id do
-        # Check if user has this role
-        case Enum.find(guild.members, fn {id, _member} -> id == user_id end) do
-          {_, member} -> role_id in member.roles
-          nil -> false
-        end
-      else
-        Logger.warning("Role '#{role_name}' not found in guild #{guild_id}")
-        false
-      end
-    rescue
-      e ->
-        Logger.error("Error checking user role: #{inspect(e)}")
-        false
+    check_user_has_role(guild, role_id, user_id, role_name, guild_id)
+  rescue
+    e ->
+      Logger.error("Error checking user role: #{inspect(e)}")
+      false
+  end
+
+  defp check_user_has_role(_guild, nil, _user_id, role_name, guild_id) do
+    Logger.warning("Role '#{role_name}' not found in guild #{guild_id}")
+    false
+  end
+
+  defp check_user_has_role(guild, role_id, user_id, _role_name, _guild_id) do
+    case Enum.find(guild.members, fn {id, _member} -> id == user_id end) do
+      {_, member} -> role_id in member.roles
+      nil -> false
     end
   end
 

@@ -97,19 +97,23 @@ defmodule SoundboardWeb.AudioPlayer do
       broadcast_error("Ein Sound wird bereits abgespielt. Bitte warten...")
       {:noreply, state}
     else
-      case get_sound_path(sound_name) do
-        {:ok, {path_or_url, volume}} ->
-          task =
-            Task.async(fn ->
-              play_sound_task(guild_id, channel_id, sound_name, path_or_url, volume, username)
-            end)
+      start_sound_playback(state, guild_id, channel_id, sound_name, username)
+    end
+  end
 
-          {:noreply, %{state | current_playback: task}}
+  defp start_sound_playback(state, guild_id, channel_id, sound_name, username) do
+    case get_sound_path(sound_name) do
+      {:ok, {path_or_url, volume}} ->
+        task =
+          Task.async(fn ->
+            play_sound_task(guild_id, channel_id, sound_name, path_or_url, volume, username)
+          end)
 
-        {:error, reason} ->
-          broadcast_error(reason)
-          {:noreply, state}
-      end
+        {:noreply, %{state | current_playback: task}}
+
+      {:error, reason} ->
+        broadcast_error(reason)
+        {:noreply, state}
     end
   end
 
