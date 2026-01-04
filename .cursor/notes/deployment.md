@@ -2,135 +2,225 @@
 
 ## Docker
 
-- **Image**: `ghcr.io/borrmann-dev/soundbored` (or `christom/soundbored`)
-- **Base**: Elixir 1.19-alpine with ffmpeg
+- **Image**: `ghcr.io/borrmann-dev/soundbored:latest`
+- **Base**: Elixir 1.19-alpine + ffmpeg
 - **Port**: 4000
 - **Volume**: `/app/priv/static/uploads` (sounds + SQLite DB)
 
-## Helm Chart
+### Local Docker
+
+```bash
+docker compose up
+# Uses .env for configuration
+```
+
+## Helm Chart (K3s)
 
 ### Structure
+
 ```
 helm/
-├── Chart.yaml           # App metadata
+├── Chart.yaml           # App metadata (v1.7.0)
 ├── values.yaml          # Non-sensitive config
 ├── secrets.yaml         # Sensitive config (gitignored!)
-├── secrets.yaml.example # Template for secrets
-├── install.sh           # Install script (auto-uses secrets.yaml)
-├── upgrade.sh           # Upgrade script
-├── uninstall.sh         # Uninstall script
+├── secrets.yaml.example # Template
+├── install.sh           # Install script
+├── upgrade.sh           # Upgrade + restart
+├── uninstall.sh         # Uninstall (prompts for PVC/NS deletion)
 └── templates/
-    ├── deployment.yaml  # Pod spec with env vars, probes, volumes
-    ├── service.yaml     # ClusterIP service (port 80 → 4000)
-    ├── ingress.yaml     # NGINX ingress with TLS
-    ├── pvc.yaml         # PersistentVolumeClaim (local-path, 5Gi)
-    └── secret.yaml      # Kubernetes Secret from values
+    ├── deployment.yaml  # Pod spec, probes, volumes
+    ├── service.yaml     # ClusterIP (80 → 4000)
+    ├── ingress.yaml     # NGINX ingress + TLS
+    ├── pvc.yaml         # PersistentVolumeClaim (30Gi, local-path)
+    └── secret.yaml      # K8s Secret from values
 ```
 
 ### Install/Upgrade
-```bash
-# Copy and fill secrets
-cp helm/secrets.yaml.example helm/secrets.yaml
-# Edit helm/secrets.yaml with your values
 
-# Install (auto-detects secrets.yaml)
+```bash
+# 1. Create secrets
+cp helm/secrets.yaml.example helm/secrets.yaml
+# Edit with your values
+
+# 2. Install
 ./helm/install.sh
 
-# Upgrade
+# 3. Upgrade (after changes)
 ./helm/upgrade.sh
 ```
 
-### Required Secrets (in `helm/secrets.yaml`)
+### Secrets Configuration
+
 ```yaml
+# helm/secrets.yaml
 secrets:
-  DISCORD_TOKEN: "bot-token-from-discord-portal"
-  DISCORD_CLIENT_ID: "oauth-client-id"
-  DISCORD_CLIENT_SECRET: "oauth-client-secret"
-  SECRET_KEY_BASE: "generate-with-openssl-rand-base64-48"
-  BASIC_AUTH_USERNAME: ""  # optional
-  BASIC_AUTH_PASSWORD: ""  # optional
+  DISCORD_TOKEN: "bot-token"
+  DISCORD_CLIENT_ID: "client-id"
+  DISCORD_CLIENT_SECRET: "client-secret"
+  SECRET_KEY_BASE: "openssl rand -base64 48"
+  # Optional:
+  BASIC_AUTH_USERNAME: "admin"
+  BASIC_AUTH_PASSWORD: "password"
+```
+
+### PVC Management
+
+**Note**: `local-path` StorageClass does NOT support volume expansion!
+
+```bash
+# Check PVC status
+kubectl get pvc -n soundbored
+
+# Resize PVC (manual process required)
+# 1. Backup
+kubectl exec -n soundbored <pod> -- tar czf - /app/priv/static/uploads > backup.tar.gz
+
+# 2. Scale down
+kubectl scale deployment soundbored -n soundbored --replicas=0
+
+# 3. Delete old PVC
+kubectl delete pvc soundbored-uploads -n soundbored
+
+# 4. Update values.yaml with new size, deploy
+helm upgrade soundbored helm/ -n soundbored -f helm/secrets.yaml
+
+# 5. Restore backup
+cat backup.tar.gz | kubectl exec -i -n soundbored <new-pod> -- tar xzf - -C /app/priv/static/uploads --strip-components=4
 ```
 
 ## CI/CD Pipeline
 
 ### Workflow (`.github/workflows/ci-cd.yml`)
-1. **Test job**: `mix format`, `mix credo`, `mix test`
-2. **Build job**: Docker build → push to GHCR
-3. **Deploy job**: SSH tunnel → Helm upgrade (currently commented out)
+
+1. **Test**: `mix format`, `mix credo`, `mix test`
+2. **Build**: Docker build → push to GHCR
+3. **Deploy**: SSH tunnel → Helm upgrade → rollout restart
+
+### Triggers
+
+- Push to `main`/`master` (excluding: `helm/`, `.github/`, `.cursor/`, `AGENTS.md`, `README.md`)
+- Pull requests
 
 ### GitHub Secrets Required
-| Secret | Purpose |
-|--------|---------|
-| `PRIVATE_KEY` | SSH private key for K3s access |
-| `PUBLIC_KEY` | SSH public key |
-| `KUBE_CONFIG` | Base64-encoded kubeconfig |
 
-## Discord Setup
+| Secret | Purpose | How to Create |
+|--------|---------|---------------|
+| `PRIVATE_KEY` | SSH private key | `~/.ssh/id_ed25519` content |
+| `PUBLIC_KEY` | SSH public key | `~/.ssh/id_ed25519.pub` content |
+| `KUBE_CONFIG` | Base64 kubeconfig | `cat ~/.kube/config \| base64 -w0` |
+| `DISCORD_TOKEN` | Discord bot token | From Discord Developer Portal |
+| `DISCORD_CLIENT_ID` | OAuth client ID | From Discord Developer Portal |
+| `DISCORD_CLIENT_SECRET` | OAuth client secret | From Discord Developer Portal |
+| `SECRET_KEY_BASE` | Phoenix secret | `openssl rand -base64 48` |
+
+## Discord Bot Setup
 
 ### 1. Create Application
+
 1. Go to [Discord Developer Portal](https://discord.com/developers/applications)
-2. Create New Application
+2. Click "New Application"
+3. Name it (e.g., "Soundbored")
 
 ### 2. Configure Bot
+
 1. Go to **Bot** section
-2. Copy **Token** → `DISCORD_TOKEN`
+2. Click "Reset Token" → Copy token → `DISCORD_TOKEN`
 3. Enable **Privileged Gateway Intents**:
    - ✅ PRESENCE INTENT
    - ✅ SERVER MEMBERS INTENT
    - ✅ MESSAGE CONTENT INTENT
 
 ### 3. Configure OAuth2
-1. Go to **OAuth2** section
+
+1. Go to **OAuth2** → **General**
 2. Copy **Client ID** → `DISCORD_CLIENT_ID`
-3. Copy **Client Secret** → `DISCORD_CLIENT_SECRET`
-4. Add **Redirect URL**: `https://soundbored.k8s.borrmann.dev/auth/discord/callback`
+3. Copy/Reset **Client Secret** → `DISCORD_CLIENT_SECRET`
+4. Add **Redirect URL**:
+   ```
+   https://soundbored.k8s.borrmann.dev/auth/discord/callback
+   ```
 
 ### 4. Invite Bot to Server
+
 1. Go to **OAuth2** → **URL Generator**
 2. Select **Guild Install**
 3. Scope: `bot`
-4. Permissions: `Send Messages`, `Read Message History`, `View Channels`, `Connect`, `Speak`
+4. Permissions:
+   - Send Messages
+   - Read Message History
+   - View Channels
+   - Connect
+   - Speak
 5. Open generated URL → Select server → Authorize
 
 ## Troubleshooting
 
 ### "Disallowed intent(s)" Error
+
 ```
 Shard websocket closed (errno 4014, reason "Disallowed intent(s).")
 ```
+
 **Fix**: Enable all 3 Privileged Gateway Intents in Discord Developer Portal → Bot
 
 ### "Invalid redirect_uri" OAuth Error
-**Fix**: Add exact callback URL to Discord Developer Portal → OAuth2 → Redirects:
+
+**Fix**: Add exact callback URL in Discord Developer Portal → OAuth2 → Redirects:
 ```
 https://soundbored.k8s.borrmann.dev/auth/discord/callback
 ```
 
-### SECRET_KEY_BASE Missing
-**Fix**: Ensure `helm/secrets.yaml` has `SECRET_KEY_BASE` set and was included during install:
-```bash
-./helm/upgrade.sh  # Auto-includes secrets.yaml
-```
+### Bot Not Joining Voice
+
+1. Check bot has Connect + Speak permissions
+2. Check `AUTO_JOIN=true` if you want auto-join
+3. Use `!join` command in Discord
 
 ### Check Logs
+
 ```bash
 kubectl logs -n soundbored deployment/soundbored --tail=100
-kubectl logs -n soundbored deployment/soundbored | head -50  # Startup logs
+kubectl logs -n soundbored deployment/soundbored -f  # Follow
 ```
 
 ### Restart Pod
+
 ```bash
 kubectl rollout restart deployment/soundbored -n soundbored
+kubectl rollout status deployment/soundbored -n soundbored
+```
+
+### Shell into Pod
+
+```bash
+kubectl exec -it -n soundbored deployment/soundbored -- /bin/sh
+```
+
+### Database Issues
+
+```bash
+# SQLite is at /app/priv/static/uploads/soundboard_prod.db
+kubectl exec -n soundbored <pod> -- cat /app/priv/static/uploads/soundboard_prod.db > backup.db
 ```
 
 ## Security Notes
 
 ### Never Commit Secrets!
+
 - `helm/secrets.yaml` is in `.gitignore`
 - GitHub push protection blocks Discord tokens
 - If secrets are exposed: **regenerate immediately**
 
 ### Regenerate Secrets
+
 1. **Discord Token**: Developer Portal → Bot → Reset Token
 2. **Client Secret**: Developer Portal → OAuth2 → Reset Secret
 3. **SECRET_KEY_BASE**: `openssl rand -base64 48`
+4. Update Helm secrets and redeploy
+
+### API Token Security
+
+- Tokens are hashed (SHA-256) before storage
+- Raw token shown only once on creation
+- Tokens can be revoked via Settings page
+- `last_used_at` tracked for audit

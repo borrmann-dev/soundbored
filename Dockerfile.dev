@@ -1,0 +1,32 @@
+FROM elixir:1.19-alpine
+
+# Install system dependencies
+RUN apk add --no-cache \
+    git \
+    make \
+    ffmpeg \
+    inotify-tools \
+    bash
+
+WORKDIR /app
+
+# Install hex and rebar
+RUN mix local.hex --force && \
+    mix local.rebar --force
+
+# Copy mix files first for better caching
+COPY mix.exs mix.lock ./
+
+# Install dependencies
+RUN mix deps.get
+
+# Copy the rest
+COPY . .
+
+# Setup assets
+RUN mix assets.setup || true
+
+EXPOSE 4000
+
+# Default command (can be overridden)
+CMD ["mix", "phx.server"]

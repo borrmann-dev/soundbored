@@ -91,18 +91,25 @@ defmodule SoundboardWeb.AudioPlayer do
         {:play_sound, sound_name, username},
         %{voice_channel: {guild_id, channel_id}} = state
       ) do
-    case get_sound_path(sound_name) do
-      {:ok, {path_or_url, volume}} ->
-        task =
-          Task.async(fn ->
-            play_sound_task(guild_id, channel_id, sound_name, path_or_url, volume, username)
-          end)
+    # Block new sounds while one is already playing
+    if Voice.playing?(guild_id) do
+      Logger.info("Blocking sound #{sound_name} - another sound is already playing")
+      broadcast_error("Ein Sound wird bereits abgespielt. Bitte warten...")
+      {:noreply, state}
+    else
+      case get_sound_path(sound_name) do
+        {:ok, {path_or_url, volume}} ->
+          task =
+            Task.async(fn ->
+              play_sound_task(guild_id, channel_id, sound_name, path_or_url, volume, username)
+            end)
 
-        {:noreply, %{state | current_playback: task}}
+          {:noreply, %{state | current_playback: task}}
 
-      {:error, reason} ->
-        broadcast_error(reason)
-        {:noreply, state}
+        {:error, reason} ->
+          broadcast_error(reason)
+          {:noreply, state}
+      end
     end
   end
 
@@ -176,12 +183,6 @@ defmodule SoundboardWeb.AudioPlayer do
   defp system_user?(username), do: username in @system_users
 
   defp play_sound_task(guild_id, channel_id, sound_name, path_or_url, volume, username) do
-    # Stop any currently playing sound immediately
-    # Direct call is fast enough, no need for Task.start which causes process leaks
-    if Voice.playing?(guild_id) do
-      Voice.stop(guild_id)
-    end
-
     # Ensure we're connected and ready
     if ensure_voice_ready(guild_id, channel_id) do
       play_sound_with_connection(guild_id, sound_name, path_or_url, volume, username)

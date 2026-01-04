@@ -1,0 +1,33 @@
+services:
+  soundbored:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    ports:
+      - "4000:4000"
+    env_file: .env
+    environment:
+      MIX_ENV: dev
+      PHX_HOST: localhost
+      SCHEME: http
+      # Bind to all interfaces so it's accessible from host
+      PHX_SERVER: "true"
+      BINDING_IP: "0.0.0.0"
+      # Set to "true" to enable Discord bot locally (will disconnect production!)
+      # Set to "false" or remove to disable bot and keep production running
+      DISABLE_DISCORD_BOT: "false"
+    volumes:
+      # Mount source code for hot reloading
+      - .:/app
+      # Persist deps and build artifacts
+      - deps:/app/deps
+      - build:/app/_build
+      # Persist uploads and database
+      - uploads:/app/priv/static/uploads
+    working_dir: /app
+    command: mix phx.server
+
+volumes:
+  deps:
+  build:
+  uploads:

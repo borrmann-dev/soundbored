@@ -25,9 +25,10 @@ defmodule Soundboard.Application do
       SoundboardWeb.DiscordHandler.State
     ]
 
-    # Add Discord bot only in non-test environments
+    # Add Discord bot only if not in test and not explicitly disabled
     children =
-      if Application.get_env(:soundboard, :env) != :test do
+      if should_start_discord_bot?() do
+        Logger.info("Starting Discord bot...")
         # Configure the Nostrum bot with the new API
         bot_options = %{
           name: SoundboardBot,
@@ -38,6 +39,7 @@ defmodule Soundboard.Application do
 
         base_children ++ [{Nostrum.Bot, bot_options}]
       else
+        Logger.info("Discord bot disabled (test env or DISABLE_DISCORD_BOT=true)")
         base_children
       end
 
@@ -51,5 +53,12 @@ defmodule Soundboard.Application do
   def config_change(changed, _new, removed) do
     SoundboardWeb.Endpoint.config_change(changed, removed)
     :ok
+  end
+
+  # Check if Discord bot should be started
+  defp should_start_discord_bot? do
+    not_test = Application.get_env(:soundboard, :env) != :test
+    not_disabled = System.get_env("DISABLE_DISCORD_BOT") not in ["true", "1", "yes"]
+    not_test and not_disabled
   end
 end

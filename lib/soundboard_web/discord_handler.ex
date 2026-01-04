@@ -314,33 +314,47 @@ defmodule SoundboardWeb.DiscordHandler do
   end
 
   def handle_event({:MESSAGE_CREATE, msg, _ws_state}) do
+    prefix = get_command_prefix()
+    join_cmd = "#{prefix}join"
+    leave_cmd = "#{prefix}leave"
+
+    Logger.debug("MESSAGE_CREATE: '#{msg.content}' | Expected join: '#{join_cmd}' | Match: #{msg.content == join_cmd}")
+
     case msg.content do
-      "!join" ->
-        case get_user_voice_channel(msg.guild_id, msg.author.id) do
-          nil ->
-            Message.create(msg.channel_id, "You need to be in a voice channel!")
+      ^join_cmd ->
+        if user_allowed_to_control_bot?(msg.guild_id, msg.author.id) do
+          case get_user_voice_channel(msg.guild_id, msg.author.id) do
+            nil ->
+              Message.create(msg.channel_id, "You need to be in a voice channel!")
 
-          channel_id ->
-            join_voice_channel(msg.guild_id, channel_id)
+            channel_id ->
+              join_voice_channel(msg.guild_id, channel_id)
 
-            # Send web interface URL
-            scheme = System.get_env("SCHEME")
+              # Send web interface URL
+              scheme = System.get_env("SCHEME")
 
-            web_url =
-              Application.get_env(:soundboard, SoundboardWeb.Endpoint)[:url][:host] || "localhost"
+              web_url =
+                Application.get_env(:soundboard, SoundboardWeb.Endpoint)[:url][:host] || "localhost"
 
-            url = "#{scheme}://#{web_url}"
+              url = "#{scheme}://#{web_url}"
 
-            Message.create(msg.channel_id, """
-            Joined your voice channel!
-            Access the soundboard here: #{url}
-            """)
+              Message.create(msg.channel_id, """
+              Joined your voice channel!
+              Access the soundboard here: #{url}
+              """)
+          end
+        else
+          Message.create(msg.channel_id, "❌ You don't have permission to control the bot.")
         end
 
-      "!leave" ->
+      ^leave_cmd ->
         if msg.guild_id do
-          leave_voice_channel(msg.guild_id)
-          Message.create(msg.channel_id, "Left the voice channel!")
+          if user_allowed_to_control_bot?(msg.guild_id, msg.author.id) do
+            leave_voice_channel(msg.guild_id)
+            Message.create(msg.channel_id, "Left the voice channel!")
+          else
+            Message.create(msg.channel_id, "❌ You don't have permission to control the bot.")
+          end
         end
 
       _ ->
@@ -505,6 +519,84 @@ defmodule SoundboardWeb.DiscordHandler do
     |> String.trim()
     |> String.downcase()
     |> then(&(&1 in ["true", "1", "yes"]))
+  end
+
+  # Get command prefix from environment variable
+  # Default: "!" → commands are !join, !leave
+  # Set BOT_COMMAND_PREFIX="!!" for !!join, !!leave
+  # Set BOT_COMMAND_PREFIX="!test" for !testjoin, !testleave
+  defp get_command_prefix do
+    System.get_env("BOT_COMMAND_PREFIX") || "!"
+  end
+
+  # Check if user is allowed to control the bot (!join, !leave)
+  # Configure via environment variables:
+  # - ALLOWED_USER_IDS: Comma-separated Discord user IDs (e.g., "123456789,987654321")
+  # - ALLOWED_ROLE_NAME: Role name that grants permission (e.g., "DJ" or "Soundboard")
+  # If neither is set, everyone can control the bot
+  defp user_allowed_to_control_bot?(guild_id, user_id) do
+    allowed_user_ids = get_allowed_user_ids()
+    allowed_role_name = System.get_env("ALLOWED_ROLE_NAME")
+
+    cond do
+      # No restrictions configured → allow everyone
+      is_nil(allowed_user_ids) and is_nil(allowed_role_name) ->
+        true
+
+      # Check if user ID is in allowed list
+      not is_nil(allowed_user_ids) and user_id in allowed_user_ids ->
+        true
+
+      # Check if user has the required role
+      not is_nil(allowed_role_name) ->
+        user_has_role?(guild_id, user_id, allowed_role_name)
+
+      # Default: not allowed
+      true ->
+        false
+    end
+  end
+
+  defp get_allowed_user_ids do
+    case System.get_env("ALLOWED_USER_IDS") do
+      nil ->
+        nil
+
+      ids_string ->
+        ids_string
+        |> String.split(",")
+        |> Enum.map(&String.trim/1)
+        |> Enum.map(&String.to_integer/1)
+    end
+  rescue
+    _ -> nil
+  end
+
+  defp user_has_role?(guild_id, user_id, role_name) do
+    try do
+      guild = GuildCache.get!(guild_id)
+
+      # Find the role ID by name
+      role_id =
+        Enum.find_value(guild.roles, fn {id, role} ->
+          if String.downcase(role.name) == String.downcase(role_name), do: id
+        end)
+
+      if role_id do
+        # Check if user has this role
+        case Enum.find(guild.members, fn {id, _member} -> id == user_id end) do
+          {_, member} -> role_id in member.roles
+          nil -> false
+        end
+      else
+        Logger.warning("Role '#{role_name}' not found in guild #{guild_id}")
+        false
+      end
+    rescue
+      e ->
+        Logger.error("Error checking user role: #{inspect(e)}")
+        false
+    end
   end
 
   defp handle_bot_alone_check(_guild_id) do

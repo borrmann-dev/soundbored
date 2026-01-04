@@ -28,10 +28,17 @@ config :soundboard, Soundboard.Repo,
 # The watchers configuration can be used to run external
 # watchers to your application. For example, we can use it
 # to bundle .js and .css sources.
+# Allow binding IP to be configured via environment variable for Docker
+binding_ip =
+  case System.get_env("BINDING_IP") do
+    "0.0.0.0" -> {0, 0, 0, 0}
+    _ -> {127, 0, 0, 1}
+  end
+
 config :soundboard, SoundboardWeb.Endpoint,
   # Binding to loopback ipv4 address prevents access from other machines.
-  # Change to `ip: {0, 0, 0, 0}` to allow access from other machines.
-  http: [ip: {127, 0, 0, 1}, port: 4000],
+  # Set BINDING_IP=0.0.0.0 to allow access from other machines (e.g. Docker).
+  http: [ip: binding_ip, port: 4000],
   url: [host: "localhost", port: 4000, scheme: "http"],
   # Disable origin checking in development
   check_origin: false,
