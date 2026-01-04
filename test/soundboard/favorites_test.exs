@@ -36,24 +36,16 @@ defmodule Soundboard.FavoritesTest do
       assert Favorites.favorite?(user.id, sound.id)
     end
 
-    test "max_favorites/0 returns the maximum number of favorites allowed" do
-      assert Favorites.max_favorites() == 16
-    end
+    test "can add unlimited favorites", %{user: user} do
+      # Create 50 sounds to verify no limit exists
+      sounds = Enum.map(1..50, fn _ -> insert_sound(user) end)
 
-    test "cannot add more favorites than max_favorites", %{user: user} do
-      # Create max_favorites + 1 number of sounds
-      sounds = Enum.map(1..(Favorites.max_favorites() + 1), fn _ -> insert_sound(user) end)
-
-      # Add max_favorites successfully
-      Enum.each(Enum.take(sounds, Favorites.max_favorites()), fn sound ->
+      # All should be added successfully
+      Enum.each(sounds, fn sound ->
         assert {:ok, _} = Favorites.toggle_favorite(user.id, sound.id)
       end)
 
-      # Try to add one more favorite - should fail
-      last_sound = List.last(sounds)
-
-      assert {:error, "You can only have 16 favorites"} =
-               Favorites.toggle_favorite(user.id, last_sound.id)
+      assert length(Favorites.list_favorites(user.id)) == 50
     end
   end
 

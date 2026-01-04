@@ -1,4 +1,4 @@
-defmodule SoundboardWeb.FavoritesLive do
+defmodule SoundboardWeb.MySoundsLive do
   use SoundboardWeb, :live_view
   use SoundboardWeb.Live.PresenceLive
   import SoundboardWeb.Components.Soundboard.TagComponents, only: [tag_filter_button: 1]
@@ -19,29 +19,31 @@ defmodule SoundboardWeb.FavoritesLive do
     socket =
       socket
       |> mount_presence(session)
-      |> assign(:current_path, "/favorites")
+      |> assign(:current_path, "/my-sounds")
       |> assign(:current_user, get_user_from_session(session))
       |> assign(:search_query, "")
       |> assign(:selected_tags, [])
 
     if socket.assigns[:current_user] do
-      favorites = Favorites.list_favorites(socket.assigns.current_user.id)
+      user = socket.assigns.current_user
+      favorites = Favorites.list_favorites(user.id)
 
-      sounds_with_tags =
+      # Get only sounds uploaded by the current user
+      my_sounds =
         Sound.with_tags()
         |> Soundboard.Repo.all()
-        |> Enum.filter(&(&1.id in favorites))
+        |> Enum.filter(&(&1.user_id == user.id))
         |> Enum.sort_by(&String.downcase(&1.filename))
 
-      {:ok, assign(socket, favorites: favorites, sounds_with_tags: sounds_with_tags)}
+      {:ok, assign(socket, favorites: favorites, my_sounds: my_sounds)}
     else
-      {:ok, assign(socket, favorites: [], sounds_with_tags: [])}
+      {:ok, assign(socket, favorites: [], my_sounds: [])}
     end
   end
 
   # Get filtered sounds based on search query and selected tags (public for template access)
   def filtered_sounds(assigns) do
-    assigns.sounds_with_tags
+    assigns.my_sounds
     |> filter_files(assigns.search_query, assigns.selected_tags)
   end
 
@@ -63,7 +65,7 @@ defmodule SoundboardWeb.FavoritesLive do
 
   @impl true
   def handle_event("toggle_tag_filter", %{"tag" => tag_name}, socket) do
-    tag = Enum.find(all_tags(socket.assigns.sounds_with_tags), &(&1.name == tag_name))
+    tag = Enum.find(all_tags(socket.assigns.my_sounds), &(&1.name == tag_name))
     current_tag = List.first(socket.assigns.selected_tags)
     selected_tags = if current_tag && current_tag.id == tag.id, do: [], else: [tag]
 
@@ -84,15 +86,9 @@ defmodule SoundboardWeb.FavoritesLive do
           {:ok, _favorite} ->
             favorites = Favorites.list_favorites(user.id)
 
-            sounds_with_tags =
-              Sound.with_tags()
-              |> Soundboard.Repo.all()
-              |> Enum.filter(&(&1.id in favorites))
-              |> Enum.sort_by(&String.downcase(&1.filename))
-
             {:noreply,
              socket
-             |> assign(favorites: favorites, sounds_with_tags: sounds_with_tags)
+             |> assign(:favorites, favorites)
              |> put_flash(:info, "Favorites updated!")}
 
           {:error, message} ->
@@ -133,15 +129,16 @@ defmodule SoundboardWeb.FavoritesLive do
   @impl true
   def handle_info({:files_updated}, socket) do
     if socket.assigns[:current_user] do
-      favorites = Favorites.list_favorites(socket.assigns.current_user.id)
+      user = socket.assigns.current_user
+      favorites = Favorites.list_favorites(user.id)
 
-      sounds_with_tags =
+      my_sounds =
         Sound.with_tags()
         |> Soundboard.Repo.all()
-        |> Enum.filter(&(&1.id in favorites))
+        |> Enum.filter(&(&1.user_id == user.id))
         |> Enum.sort_by(&String.downcase(&1.filename))
 
-      {:noreply, assign(socket, favorites: favorites, sounds_with_tags: sounds_with_tags)}
+      {:noreply, assign(socket, favorites: favorites, my_sounds: my_sounds)}
     else
       {:noreply, socket}
     end
@@ -154,24 +151,7 @@ defmodule SoundboardWeb.FavoritesLive do
 
   @impl true
   def handle_info({:stats_updated}, socket) do
-    case socket.assigns.current_user do
-      nil ->
-        {:noreply, socket}
-
-      user ->
-        favorites = Favorites.list_favorites(user.id)
-
-        sounds_with_tags =
-          Sound.with_tags()
-          |> Soundboard.Repo.all()
-          |> Enum.filter(&(&1.id in favorites))
-          |> Enum.sort_by(&String.downcase(&1.filename))
-
-        {:noreply,
-         socket
-         |> assign(:favorites, favorites)
-         |> assign(:sounds_with_tags, sounds_with_tags)}
-    end
+    {:noreply, socket}
   end
 
   defp clear_flash_after_timeout(socket) do

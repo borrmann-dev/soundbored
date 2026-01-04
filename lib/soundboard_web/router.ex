@@ -54,6 +54,7 @@ defmodule SoundboardWeb.Router do
     live "/", SoundboardLive
     live "/stats", StatsLive
     live "/favorites", FavoritesLive
+    live "/my-sounds", MySoundsLive
     live "/settings", SettingsLive
   end
 
