@@ -64,18 +64,19 @@ defmodule Soundboard.Tags.TagTest do
       %{tag1: tag1, tag2: tag2, suffix: suffix}
     end
 
-    test "finds tags by partial name match", %{suffix: suffix} do
-      results = Tag.search("searchable_#{suffix}") |> Repo.all()
-      assert length(results) == 2
-      names = Enum.map(results, & &1.name) |> Enum.sort()
-      assert names == ["searchable_#{suffix}", "searchable_extra_#{suffix}"]
+    test "finds tags by partial name match", %{tag1: tag1, tag2: tag2} do
+      # Search for the common prefix that both tags share
+      results = Tag.search("searchable_") |> Repo.all()
+      result_names = Enum.map(results, & &1.name)
+      assert tag1.name in result_names
+      assert tag2.name in result_names
     end
 
-    test "search is case insensitive", %{suffix: suffix} do
-      results = Tag.search("SEARCHABLE_#{suffix}") |> Repo.all()
-      assert length(results) == 2
-      names = Enum.map(results, & &1.name) |> Enum.sort()
-      assert names == ["searchable_#{suffix}", "searchable_extra_#{suffix}"]
+    test "search is case insensitive", %{tag1: tag1, tag2: tag2} do
+      results = Tag.search("SEARCHABLE_") |> Repo.all()
+      result_names = Enum.map(results, & &1.name)
+      assert tag1.name in result_names
+      assert tag2.name in result_names
     end
   end
 

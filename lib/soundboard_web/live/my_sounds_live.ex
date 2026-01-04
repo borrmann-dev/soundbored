@@ -7,7 +7,7 @@ defmodule SoundboardWeb.MySoundsLive do
   import SoundboardWeb.Components.Soundboard.TagComponents, only: [tag_filter_button: 1]
   alias Soundboard.{Favorites, Repo, Sound, Volume}
   alias SoundboardWeb.Live.{FileFilter, TagHandler}
-  import TagHandler, only: [all_tags: 1, tag_selected?: 2]
+  import TagHandler, only: [all_tags: 1]
   import FileFilter, only: [filter_files: 3]
   import Ecto.Query
   require Logger
