@@ -31,7 +31,7 @@ helm/
     ├── deployment.yaml  # Pod spec, probes, volumes
     ├── service.yaml     # ClusterIP (80 → 4000)
     ├── ingress.yaml     # NGINX ingress + TLS
-    ├── pvc.yaml         # PersistentVolumeClaim (30Gi, local-path)
+    ├── pvc.yaml         # PersistentVolumeClaim (30Gi, longhorn)
     └── secret.yaml      # K8s Secret from values
 ```
 
@@ -65,27 +65,13 @@ secrets:
 
 ### PVC Management
 
-**Note**: `local-path` StorageClass does NOT support volume expansion!
+**Storage**: Uses `longhorn` StorageClass (supports volume expansion).
 
 ```bash
 # Check PVC status
 kubectl get pvc -n soundbored
 
-# Resize PVC (manual process required)
-# 1. Backup
-kubectl exec -n soundbored <pod> -- tar czf - /app/priv/static/uploads > backup.tar.gz
-
-# 2. Scale down
-kubectl scale deployment soundbored -n soundbored --replicas=0
-
-# 3. Delete old PVC
-kubectl delete pvc soundbored-uploads -n soundbored
-
-# 4. Update values.yaml with new size, deploy
-helm upgrade soundbored helm/ -n soundbored -f helm/secrets.yaml
-
-# 5. Restore backup
-cat backup.tar.gz | kubectl exec -i -n soundbored <new-pod> -- tar xzf - -C /app/priv/static/uploads --strip-components=4
+# Longhorn UI: https://longhorn.k8s.borrmann.dev
 ```
 
 ## CI/CD Pipeline

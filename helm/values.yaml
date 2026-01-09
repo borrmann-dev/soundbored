@@ -20,6 +20,7 @@ env:
 # Persistent storage for uploads and SQLite database
 persistence:
   enabled: true
+  storageClass: "longhorn"
   size: 30Gi
 
 ingress:
