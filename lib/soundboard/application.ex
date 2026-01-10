@@ -11,6 +11,15 @@ defmodule Soundboard.Application do
   def start(_type, _args) do
     Logger.info("Starting Soundboard Application")
 
+    # Log Nostrum audio configuration to verify settings are loaded
+    audio_frames = Application.get_env(:nostrum, :audio_frames_per_burst, :not_set)
+    audio_timeout = Application.get_env(:nostrum, :audio_timeout, :not_set)
+    ffmpeg_path = Application.get_env(:nostrum, :ffmpeg, :not_set)
+
+    Logger.info(
+      "Nostrum Audio Config - frames_per_burst: #{inspect(audio_frames)}, timeout: #{inspect(audio_timeout)}, ffmpeg: #{inspect(ffmpeg_path)}"
+    )
+
     # Initialize presence handler state
     PresenceHandler.init()
 

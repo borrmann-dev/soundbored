@@ -126,8 +126,9 @@ config :soundboard,
 
 # Configure Nostrum with optimized audio settings for reliable playback
 config :nostrum,
-  # Maximum buffer for absolute reliability (15 frames = 300ms)
+  # Maximum buffer for absolute reliability (20 frames = 400ms)
   # Very high buffer compensates for network jitter and UDP packet loss
-  audio_frames_per_burst: 15,
+  # Increased from 15 to 20 for even better stability
+  audio_frames_per_burst: 20,
   # Increased timeout for more reliable connection handling
-  audio_timeout: 20_000
+  audio_timeout: 30_000

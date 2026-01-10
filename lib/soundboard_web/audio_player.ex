@@ -320,20 +320,28 @@ defmodule SoundboardWeb.AudioPlayer do
          sound_name,
          username
        ) do
-    # For URL-based sounds, use longer delays to allow network connection to stabilize
-    # URL streaming requires network handshake which can cause initial glitches
-    stabilization_delay = if source_type == "url", do: 300, else: 100
+    # Increased stabilization delay for both sources to ensure connection is fully ready
+    # This helps prevent glitches at the start of playback
+    # Both local and URL sources benefit from this delay
+    stabilization_delay = 200
 
     Logger.info("Using stabilization delay: #{stabilization_delay}ms for #{source_type} source")
 
     Process.sleep(stabilization_delay)
+
+    # Additional pre-playback check to ensure voice connection is absolutely ready
+    # This double-check helps prevent glitches from unstable connections
+    if not Voice.ready?(guild_id) do
+      Logger.warning("Voice not ready after stabilization, waiting additional 100ms...")
+      Process.sleep(100)
+    end
 
     # Disable ffmpeg realtime processing to avoid `-re` pacing.
     # Nostrum already paces via bursts; `-re` can cause latency buildup
     # and slower cleanup of ffmpeg processes over time.
     # Additional options for stability:
     # - realtime: false prevents ffmpeg from pacing (Nostrum handles it)
-    # - Higher buffer (15 frames) compensates for network jitter
+    # - Higher buffer (20 frames = 400ms) compensates for network jitter
     # - volume: clamp_volume ensures volume is in valid range (0.0-1.5)
     #   Note: Nostrum's volume parameter should work for both local and URL sources
     clamped_vol = clamp_volume(volume)
@@ -343,13 +351,21 @@ defmodule SoundboardWeb.AudioPlayer do
       realtime: false
     ]
 
+    # Log actual Nostrum config values to verify they're loaded
+    actual_frames = Application.get_env(:nostrum, :audio_frames_per_burst, :not_set)
+    actual_timeout = Application.get_env(:nostrum, :audio_timeout, :not_set)
+
     Logger.info(
       "Play options: #{inspect(play_options)} (source_type: #{source_type}, original_volume: #{volume})"
     )
 
+    Logger.info(
+      "Nostrum Config Check - frames_per_burst: #{inspect(actual_frames)}, timeout: #{inspect(actual_timeout)}"
+    )
+
     # Keep track of attempts
-    # For URL sources, use more retries due to network instability
-    max_retries = if source_type == "url", do: 5, else: 3
+    # Increased retries for both sources since glitches can occur with both
+    max_retries = 5
 
     play_with_retries(
       guild_id,
@@ -367,15 +383,17 @@ defmodule SoundboardWeb.AudioPlayer do
   defp validate_voice_state(guild_id) do
     # Check multiple times with longer delays to ensure stability
     # More thorough checking prevents dropouts from unstable connections
+    # Increased checks and delays for better reliability
     checks =
-      for _ <- 1..5 do
-        Process.sleep(30)
+      for _ <- 1..7 do
+        Process.sleep(50)
         Voice.ready?(guild_id)
       end
 
-    # At least 4 out of 5 checks should pass (allows for minor fluctuations)
+    # At least 6 out of 7 checks should pass (allows for minor fluctuations)
+    # Stricter requirement for better reliability
     passing_checks = Enum.count(checks, & &1)
-    passing_checks >= 4
+    passing_checks >= 6
   end
 
   # Wait for current playback to complete with timeout
