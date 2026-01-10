@@ -91,8 +91,9 @@ defmodule SoundboardWeb.AudioPlayer do
         {:play_sound, sound_name, username},
         %{voice_channel: {guild_id, channel_id}} = state
       ) do
-    # Block new sounds while one is already playing
-    if Voice.playing?(guild_id) do
+    # More thorough check: wait a bit and check multiple times
+    # This prevents race conditions where audio just finished
+    if check_playing_with_retries(guild_id, 3, 50) do
       Logger.info("Blocking sound #{sound_name} - another sound is already playing")
       broadcast_error("Ein Sound wird bereits abgespielt. Bitte warten...")
       {:noreply, state}
@@ -100,6 +101,18 @@ defmodule SoundboardWeb.AudioPlayer do
       start_sound_playback(state, guild_id, channel_id, sound_name, username)
     end
   end
+
+  # Check if audio is playing with multiple retries to avoid race conditions
+  defp check_playing_with_retries(guild_id, retries_left, delay_ms) when retries_left > 0 do
+    if Voice.playing?(guild_id) do
+      true
+    else
+      Process.sleep(delay_ms)
+      check_playing_with_retries(guild_id, retries_left - 1, delay_ms)
+    end
+  end
+
+  defp check_playing_with_retries(_guild_id, 0, _delay_ms), do: false
 
   defp start_sound_playback(state, guild_id, channel_id, sound_name, username) do
     case get_sound_path(sound_name) do
@@ -189,31 +202,114 @@ defmodule SoundboardWeb.AudioPlayer do
   defp play_sound_task(guild_id, channel_id, sound_name, path_or_url, volume, username) do
     # Ensure we're connected and ready
     if ensure_voice_ready(guild_id, channel_id) do
-      play_sound_with_connection(guild_id, sound_name, path_or_url, volume, username)
+      # Additional validation: ensure connection is stable
+      if Voice.ready?(guild_id) do
+        # Longer delay to ensure connection is fully stabilized before playback
+        # This helps prevent dropouts at the start of audio
+        # Increased delay gives Discord more time to establish stable connection
+        # Additional delay for maximum stability
+        Process.sleep(200)
+        
+        # Final check before proceeding
+        if Voice.ready?(guild_id) do
+          play_sound_with_connection(guild_id, sound_name, path_or_url, volume, username)
+        else
+          Logger.error("Voice connection became unstable after stabilization delay")
+          broadcast_error("Voice-Verbindung instabil. Bitte erneut versuchen.")
+        end
+      else
+        Logger.error("Voice connection not ready after ensure_voice_ready")
+        broadcast_error("Voice-Verbindung nicht bereit")
+      end
     else
       Logger.error("Failed to establish voice connection")
-      broadcast_error("Failed to connect to voice channel")
+      broadcast_error("Fehler beim Verbinden zum Voice-Kanal")
     end
   end
 
   defp play_sound_with_connection(guild_id, sound_name, path_or_url, volume, username) do
-    {play_input, play_type} = prepare_play_input(sound_name, path_or_url)
+    # Pre-validate voice connection state before attempting playback
+    if validate_voice_state(guild_id) do
+      {play_input, play_type} = prepare_play_input(sound_name, path_or_url)
 
-    Logger.info(
-      "Calling Voice.play with guild_id: #{guild_id}, input: #{play_input}, type: #{play_type}"
-    )
+      Logger.info(
+        "Calling Voice.play with guild_id: #{guild_id}, input: #{play_input}, type: #{play_type}"
+      )
 
-    # Check voice state
-    Logger.info("Voice ready: #{Voice.ready?(guild_id)}, Playing: #{Voice.playing?(guild_id)}")
+      # Double-check voice state right before playback
+      voice_ready = Voice.ready?(guild_id)
+      voice_playing = Voice.playing?(guild_id)
+      Logger.info("Voice ready: #{voice_ready}, Playing: #{voice_playing}")
 
-    # Disable ffmpeg realtime processing to avoid `-re` pacing.
-    # Nostrum already paces via bursts; `-re` can cause latency buildup
-    # and slower cleanup of ffmpeg processes over time.
-    play_options = [volume: clamp_volume(volume), realtime: false]
-    Logger.info("Play options: #{inspect(play_options)}")
+      # If something is still playing, wait longer to ensure clean transition
+      if voice_playing do
+        Logger.warning("Audio still playing, waiting for completion...")
+        wait_for_playback_completion(guild_id, 20, 150)
+        # Additional stabilization delay after previous playback ends
+        Process.sleep(100)
+      end
 
-    # Keep track of attempts
-    play_with_retries(guild_id, play_input, play_type, play_options, sound_name, username, 0)
+      # Final stabilization check right before playback
+      # This ensures connection is absolutely ready
+      if Voice.ready?(guild_id) do
+        # Longer delay to let any pending operations complete and ensure
+        # the voice connection is fully ready for streaming
+        Process.sleep(100)
+        
+        # Disable ffmpeg realtime processing to avoid `-re` pacing.
+        # Nostrum already paces via bursts; `-re` can cause latency buildup
+        # and slower cleanup of ffmpeg processes over time.
+        # Additional options for stability:
+        # - realtime: false prevents ffmpeg from pacing (Nostrum handles it)
+        # - Higher buffer (15 frames) compensates for network jitter
+        play_options = [
+          volume: clamp_volume(volume),
+          realtime: false
+        ]
+        Logger.info("Play options: #{inspect(play_options)}")
+
+        # Keep track of attempts
+        play_with_retries(guild_id, play_input, play_type, play_options, sound_name, username, 0)
+      else
+        Logger.error("Voice connection lost right before playback")
+        broadcast_error("Voice-Verbindung verloren. Bitte erneut versuchen.")
+        :error
+      end
+    else
+      Logger.error("Voice connection not in valid state for playback")
+      broadcast_error("Voice-Verbindung nicht bereit. Bitte erneut versuchen.")
+      :error
+    end
+  end
+
+  # Validate that voice connection is in a good state for playback
+  defp validate_voice_state(guild_id) do
+    # Check multiple times with longer delays to ensure stability
+    # More thorough checking prevents dropouts from unstable connections
+    checks = for _ <- 1..5 do
+      Process.sleep(30)
+      Voice.ready?(guild_id)
+    end
+
+    # At least 4 out of 5 checks should pass (allows for minor fluctuations)
+    passing_checks = Enum.count(checks, & &1)
+    passing_checks >= 4
+  end
+
+  # Wait for current playback to complete with timeout
+  defp wait_for_playback_completion(guild_id, max_attempts, delay_ms) when max_attempts > 0 do
+    if Voice.playing?(guild_id) do
+      Process.sleep(delay_ms)
+      wait_for_playback_completion(guild_id, max_attempts - 1, delay_ms)
+    else
+      Logger.info("Previous playback completed")
+      :ok
+    end
+  end
+
+  defp wait_for_playback_completion(_guild_id, 0, _delay_ms) do
+    Logger.warning("Timeout waiting for playback to complete")
+    :timeout
   end
 
   defp play_with_retries(
@@ -229,6 +325,11 @@ defmodule SoundboardWeb.AudioPlayer do
     case Voice.play(guild_id, play_input, play_type, play_options) do
       :ok ->
         Logger.info("Voice.play succeeded for #{sound_name} (attempt #{attempt + 1})")
+        
+        # Start monitoring connection health during playback
+        # This helps detect and potentially recover from mid-playback issues
+        start_playback_monitoring(guild_id, sound_name)
+        
         track_play_if_needed(sound_name, username)
         broadcast_success(sound_name, username)
         :ok
@@ -237,8 +338,18 @@ defmodule SoundboardWeb.AudioPlayer do
         Logger.warning("Audio still playing on attempt #{attempt + 1}, stopping and retrying...")
         # Force stop the current audio
         Voice.stop(guild_id)
-        # Small delay to ensure stop completes
-        Process.sleep(50)
+        # Longer delay to ensure stop completes and connection stabilizes
+        # Exponential backoff with longer delays: 200ms, 400ms, 600ms
+        stop_delay = 200 * (attempt + 1)
+        Process.sleep(stop_delay)
+        
+        # Verify stop completed before retrying
+        if Voice.playing?(guild_id) do
+          Logger.warning("Audio still playing after stop, waiting longer...")
+          Process.sleep(300)
+          Voice.stop(guild_id)
+          Process.sleep(200)
+        end
 
         play_with_retries(
           guild_id,
@@ -265,8 +376,26 @@ defmodule SoundboardWeb.AudioPlayer do
 
       {:error, reason} ->
         Logger.error("Voice.play failed: #{inspect(reason)} (attempt #{attempt + 1})")
-        broadcast_error("Failed to play sound: #{reason}")
-        :error
+        
+        # Try to recover from specific error types
+        recovered = attempt_recovery(guild_id, reason, attempt)
+        
+        if recovered and attempt < 2 do
+          Logger.info("Recovery successful, retrying playback...")
+          Process.sleep(100)
+          play_with_retries(
+            guild_id,
+            play_input,
+            play_type,
+            play_options,
+            sound_name,
+            username,
+            attempt + 1
+          )
+        else
+          broadcast_error("Fehler beim Abspielen: #{reason}")
+          :error
+        end
     end
   end
 
@@ -301,18 +430,23 @@ defmodule SoundboardWeb.AudioPlayer do
         # Voice.join_channel returns :ok or crashes (no_return)
         try do
           Voice.join_channel(guild_id, channel_id)
-          # Reduced delay - just enough for connection handshake
-          Process.sleep(50)
-
-          play_with_retries(
-            guild_id,
-            play_input,
-            play_type,
-            play_options,
-            sound_name,
-            username,
-            attempt + 1
-          )
+          # Wait longer for connection to fully establish before retrying playback
+          # Verify connection is ready before attempting to play
+          if verify_connection_with_retries(guild_id, 3, 100) do
+            play_with_retries(
+              guild_id,
+              play_input,
+              play_type,
+              play_options,
+              sound_name,
+              username,
+              attempt + 1
+            )
+          else
+            Logger.error("Failed to establish voice connection after rejoin")
+            broadcast_error("Failed to reconnect to voice channel")
+            :error
+          end
         rescue
           error ->
             Logger.error("Failed to rejoin voice channel: #{inspect(error)}")
@@ -330,8 +464,8 @@ defmodule SoundboardWeb.AudioPlayer do
   # Removed unused wait_for_audio_to_finish/2 to keep compile clean and hot path lean
 
   defp schedule_voice_check do
-    # Check voice connection every 30 seconds
-    Process.send_after(self(), :check_voice_connection, 30_000)
+    # Check voice connection every 15 seconds for better reliability
+    Process.send_after(self(), :check_voice_connection, 15_000)
   end
 
   # Ensure ETS table exists (idempotent)
@@ -403,26 +537,36 @@ defmodule SoundboardWeb.AudioPlayer do
     # Using rescue to handle potential crashes
     Voice.join_channel(guild_id, channel_id)
 
-    # Check immediately if ready, no sleep needed
-    if Voice.ready?(guild_id) do
-      Logger.info("Successfully connected to voice channel")
-      true
-    else
-      # Minimal sleep - just 20ms for network round-trip
-      Process.sleep(20)
-
-      if Voice.ready?(guild_id) do
-        Logger.info("Successfully connected to voice channel after brief wait")
-        true
-      else
-        Logger.error("Voice connection not ready after join attempt")
-        false
-      end
-    end
+    # Wait a bit longer and check multiple times for more reliable connection
+    # Discord voice connections can take a moment to fully establish
+    verify_connection_with_retries(guild_id, 3, 50)
   rescue
     error ->
       Logger.error("Failed to join voice channel: #{inspect(error)}")
       false
+  end
+
+  defp verify_connection_with_retries(guild_id, retries_left, delay_ms) when retries_left > 0 do
+    Process.sleep(delay_ms)
+
+    if Voice.ready?(guild_id) do
+      # Double-check: verify it stays ready for a moment
+      Process.sleep(50)
+      if Voice.ready?(guild_id) do
+        Logger.info("Successfully connected to voice channel (verified stable)")
+        true
+      else
+        Logger.warning("Connection became unstable, retrying...")
+        verify_connection_with_retries(guild_id, retries_left - 1, delay_ms)
+      end
+    else
+      verify_connection_with_retries(guild_id, retries_left - 1, delay_ms)
+    end
+  end
+
+  defp verify_connection_with_retries(_guild_id, 0, _delay_ms) do
+    Logger.error("Voice connection not ready after multiple verification attempts")
+    false
   end
 
   defp broadcast_success(sound_name, username) do
@@ -444,11 +588,83 @@ defmodule SoundboardWeb.AudioPlayer do
   defp clamp_volume(value) when is_number(value) do
     value
     |> max(0.0)
-    |> min(1.0)
+    |> min(1.5)
     |> Float.round(4)
   end
 
   defp clamp_volume(_), do: 1.0
+
+  # Monitor voice connection health during active playback
+  # This helps detect connection issues that might cause glitches
+  defp start_playback_monitoring(guild_id, sound_name) do
+    # Spawn a monitoring process that checks connection health
+    # every 2 seconds while audio is playing
+    spawn(fn ->
+      monitor_playback_connection(guild_id, sound_name, 0)
+    end)
+  end
+
+  defp monitor_playback_connection(guild_id, sound_name, check_count) do
+    # Stop monitoring after 30 checks (60 seconds) or if playback stopped
+    if check_count < 30 and Voice.playing?(guild_id) do
+      Process.sleep(2000)
+      
+      # Check if connection is still healthy
+      if Voice.ready?(guild_id) do
+        # Connection is healthy, continue monitoring
+        monitor_playback_connection(guild_id, sound_name, check_count + 1)
+      else
+        # Connection lost during playback - log warning
+        Logger.warning(
+          "Voice connection lost during playback of #{sound_name} (check #{check_count + 1})"
+        )
+        # Try to continue monitoring in case it recovers
+        monitor_playback_connection(guild_id, sound_name, check_count + 1)
+      end
+    else
+      # Monitoring complete or playback stopped
+      if check_count >= 30 do
+        Logger.debug("Playback monitoring completed for #{sound_name}")
+      end
+    end
+  end
+
+  # Attempt to recover from specific error conditions
+  defp attempt_recovery(guild_id, reason, attempt) when attempt < 2 do
+    cond do
+      # Connection issues - try to re-establish
+      String.contains?(to_string(reason), "connected") or
+          String.contains?(to_string(reason), "connection") ->
+        Logger.info("Attempting to recover from connection error...")
+        # Small delay then check if ready
+        Process.sleep(200)
+        if Voice.ready?(guild_id) do
+          true
+        else
+          # Try to stop and re-check
+          try do
+            Voice.stop(guild_id)
+            Process.sleep(100)
+            Voice.ready?(guild_id)
+          rescue
+            _ -> false
+          end
+        end
+
+      # Timeout or processing errors - just wait and retry
+      String.contains?(to_string(reason), "timeout") or
+          String.contains?(to_string(reason), "process") ->
+        Logger.info("Waiting after timeout/process error...")
+        Process.sleep(300)
+        Voice.ready?(guild_id)
+
+      # Unknown errors - minimal recovery attempt
+      true ->
+        false
+    end
+  end
+
+  defp attempt_recovery(_guild_id, _reason, _attempt), do: false
 
   defp get_sound_path(sound_name) do
     Logger.info("Getting sound path for: #{sound_name}")

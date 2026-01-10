@@ -35,8 +35,8 @@ config :nostrum,
   youtubedl: nil,
   streamlink: nil,
   ffmpeg: "/usr/bin/ffmpeg",
-  # Reduce audio buffering for faster playback
-  # Reduced from default 10 (40ms instead of 200ms)
-  audio_frames_per_burst: 2,
-  # Reduced from default 20_000ms
-  audio_timeout: 5_000
+  # Maximum buffer for absolute reliability (15 frames = 300ms)
+  # Very high buffer compensates for network jitter and UDP packet loss
+  audio_frames_per_burst: 15,
+  # Increased timeout for more reliable connection handling
+  audio_timeout: 20_000

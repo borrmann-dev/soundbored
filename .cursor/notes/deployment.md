@@ -162,6 +162,38 @@ https://soundbored.k8s.borrmann.dev/auth/discord/callback
 2. Check `AUTO_JOIN=true` if you want auto-join
 3. Use `!join` command in Discord
 
+### Audio Dropouts / Network Issues
+
+**Discord Voice Protocol:**
+- Discord Voice verwendet **UDP** standardmäßig (nicht TCP)
+- UDP bietet niedrigere Latenz, ist aber anfälliger für Paketverluste
+- Das Protokoll wird automatisch von Nostrum/Discord bestimmt und kann nicht geändert werden
+- Wenn UDP blockiert ist, kann Discord auf TCP zurückfallen (höhere Latenz)
+
+**Netzwerk-Optimierungen:**
+1. **Firewall**: Stelle sicher, dass UDP-Ports nicht blockiert sind
+   - Discord Voice verwendet dynamische UDP-Ports (50000-65535)
+   - Keine festen Ports, daher schwer zu konfigurieren
+   
+2. **NAT/Firewall**: Für beste Performance:
+   - UDP sollte nicht blockiert werden
+   - NAT sollte UDP-Traffic korrekt weiterleiten
+   - Keine aggressive UDP-Timeout-Konfiguration
+
+3. **System-Level**: 
+   - Netzwerk-Buffer können erhöht werden (OS-abhängig)
+   - QoS/Priorität für UDP-Traffic setzen (falls möglich)
+
+4. **Application-Level** (bereits implementiert):
+   - `audio_frames_per_burst: 10` (200ms Buffer) - kompensiert Paketverluste
+   - Längere Timeouts und Stabilisierungsverzögerungen
+   - Mehrfache Verbindungsvalidierung
+
+**Wenn UDP blockiert ist:**
+- Discord fällt automatisch auf TCP zurück
+- Höhere Latenz, aber stabilere Verbindung
+- Keine Konfiguration nötig - passiert automatisch
+
 ### Check Logs
 
 ```bash
