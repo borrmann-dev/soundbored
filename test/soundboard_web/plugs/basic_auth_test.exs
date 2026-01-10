@@ -16,6 +16,10 @@ defmodule SoundboardWeb.BasicAuthPlugTest do
   end
 
   test "skips when credentials not configured" do
+    # Explicitly ensure env vars are not set
+    System.delete_env("BASIC_AUTH_USERNAME")
+    System.delete_env("BASIC_AUTH_PASSWORD")
+
     conn = conn(:get, "/") |> BasicAuth.call(%{})
     refute conn.halted
   end

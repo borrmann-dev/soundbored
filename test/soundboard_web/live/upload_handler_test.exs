@@ -72,7 +72,7 @@ defmodule SoundboardWeb.Live.UploadHandlerTest do
     end
 
     test "validates local upload with valid name", %{socket: socket} do
-      params = %{"name" => "test_sound"}
+      params = %{"source_type" => "local", "name" => "test_sound"}
       assert {:ok, _socket} = UploadHandler.validate_upload(socket, params)
     end
 
@@ -87,14 +87,14 @@ defmodule SoundboardWeb.Live.UploadHandlerTest do
         })
         |> Repo.insert()
 
-      params = %{"name" => "test_sound"}
+      params = %{"source_type" => "local", "name" => "test_sound"}
       assert {:error, changeset} = UploadHandler.validate_upload(socket, params)
       assert "has already been taken" in errors_on(changeset).filename
     end
 
     test "validates local upload with missing file", %{socket: socket} do
       socket = put_in(socket.assigns.uploads.audio.entries, [])
-      params = %{}
+      params = %{"source_type" => "local"}
       assert {:error, changeset} = UploadHandler.validate_upload(socket, params)
       assert "Please select a file" in errors_on(changeset).file
     end
