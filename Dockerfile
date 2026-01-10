@@ -40,6 +40,8 @@ ENV MIX_ENV=prod \
 
 RUN apk add --no-cache \
     ffmpeg \
+    opus \
+    opus-dev \
     git
 
 WORKDIR /app

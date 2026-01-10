@@ -343,12 +343,54 @@ defmodule SoundboardWeb.AudioPlayer do
     # - realtime: false prevents ffmpeg from pacing (Nostrum handles it)
     # - Higher buffer (20 frames = 400ms) compensates for network jitter
     # - volume: clamp_volume ensures volume is in valid range (0.0-1.5)
-    #   Note: Nostrum's volume parameter should work for both local and URL sources
+    # - executable_args: Force Opus codec for Discord-native audio format
+    #   Note: Discord uses Opus natively, so using it directly avoids transcoding
+    #   and improves quality while reducing glitches
     clamped_vol = clamp_volume(volume)
 
+    # Discord Voice Protocol requires EXACT format - any deviation causes glitches
+    # Discord expects: PCM 16-bit signed, 48kHz, Stereo, Little Endian, 20ms frames
+    # This equals: 48000 Samples/sec, 960 Samples/Channel/Frame, 1920 Samples total/Frame
+    # 1920 * 2 Bytes = 3840 Bytes/Frame, 50 Frames/sec
+    #
+    # Most common glitch causes:
+    # - 44.1 kHz instead of 48 kHz
+    # - Mono instead of Stereo
+    # - Float PCM instead of 16-bit signed
+    # - Unsynchronized frame timing
+    # - Missing aresample=async=1
+    #
+    # Solution: Use proven stable FFmpeg pipeline:
+    # -f s16le (16-bit signed little endian PCM)
+    # -ar 48000 (48kHz sample rate)
+    # -ac 2 (Stereo, 2 channels)
+    # -af aresample=async=1:first_pts=0 (async resampling for clean frame timing)
+    #
+    # Audio Pipeline:
+    # 1. FFmpeg converts input to PCM 16-bit signed, 48kHz, Stereo (this step)
+    # 2. Nostrum receives PCM and converts it to Opus for Discord
+    # 3. Discord receives Opus-encoded audio
+    #
+    # We output PCM (not Opus) because Nostrum handles Opus encoding internally.
+    # This ensures Nostrum can properly control the Opus encoding process.
     play_options = [
       volume: clamped_vol,
-      realtime: false
+      realtime: false,
+      executable_args: [
+        # Output format: 16-bit signed little endian PCM (Discord's expected format)
+        "-f",
+        "s16le",
+        # Sample rate: 48kHz (MUST be 48kHz, not 44.1kHz)
+        "-ar",
+        "48000",
+        # Channels: Stereo (MUST be 2 channels, not mono)
+        "-ac",
+        "2",
+        # Audio filter: Async resampling with first_pts=0 for clean frame timing
+        # This prevents unsynchronized frames that cause glitches
+        "-af",
+        "aresample=async=1:first_pts=0"
+      ]
     ]
 
     # Log actual Nostrum config values to verify they're loaded
