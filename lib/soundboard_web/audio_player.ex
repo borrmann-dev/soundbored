@@ -7,6 +7,7 @@ defmodule SoundboardWeb.AudioPlayer do
   alias Nostrum.Voice
   alias Soundboard.Accounts.User
   alias Soundboard.Sound
+  alias HTTPoison
 
   # System users that don't need play tracking
   @system_users ["System", "API User"]
@@ -246,11 +247,25 @@ defmodule SoundboardWeb.AudioPlayer do
   defp play_sound_with_connection(guild_id, sound_name, path_or_url, volume, username) do
     # Pre-validate voice connection state before attempting playback
     if validate_voice_state(guild_id) do
-      {play_input, play_type} = prepare_play_input(sound_name, path_or_url)
+      {play_input, play_type, source_type} = prepare_play_input(sound_name, path_or_url)
 
       Logger.info(
-        "Calling Voice.play with guild_id: #{guild_id}, input: #{play_input}, type: #{play_type}"
+        "Calling Voice.play with guild_id: #{guild_id}, input: #{play_input}, type: #{play_type}, volume: #{volume}, source_type: #{source_type}"
       )
+
+      # For URL-based sounds, validate URL accessibility before playback
+      # This helps prevent glitches from network issues
+      # Run validation in background to avoid blocking playback
+      if source_type == "url" do
+        spawn(fn ->
+          case validate_url_accessibility(play_input) do
+            :ok ->
+              Logger.info("URL validated and accessible: #{play_input}")
+            {:error, reason} ->
+              Logger.warning("URL validation failed: #{reason}, but playback may still work")
+          end
+        end)
+      end
 
       # Double-check voice state right before playback
       voice_ready = Voice.ready?(guild_id)
@@ -268,9 +283,11 @@ defmodule SoundboardWeb.AudioPlayer do
       # Final stabilization check right before playback
       # This ensures connection is absolutely ready
       if Voice.ready?(guild_id) do
-        # Longer delay to let any pending operations complete and ensure
-        # the voice connection is fully ready for streaming
-        Process.sleep(100)
+        # For URL-based sounds, use longer delays to allow network connection to stabilize
+        # URL streaming requires network handshake which can cause initial glitches
+        stabilization_delay = if source_type == "url", do: 300, else: 100
+        Logger.info("Using stabilization delay: #{stabilization_delay}ms for #{source_type} source")
+        Process.sleep(stabilization_delay)
 
         # Disable ffmpeg realtime processing to avoid `-re` pacing.
         # Nostrum already paces via bursts; `-re` can cause latency buildup
@@ -278,15 +295,20 @@ defmodule SoundboardWeb.AudioPlayer do
         # Additional options for stability:
         # - realtime: false prevents ffmpeg from pacing (Nostrum handles it)
         # - Higher buffer (15 frames) compensates for network jitter
+        # - volume: clamp_volume ensures volume is in valid range (0.0-1.5)
+        #   Note: Nostrum's volume parameter should work for both local and URL sources
+        clamped_vol = clamp_volume(volume)
         play_options = [
-          volume: clamp_volume(volume),
+          volume: clamped_vol,
           realtime: false
         ]
 
-        Logger.info("Play options: #{inspect(play_options)}")
+        Logger.info("Play options: #{inspect(play_options)} (source_type: #{source_type}, original_volume: #{volume})")
 
         # Keep track of attempts
-        play_with_retries(guild_id, play_input, play_type, play_options, sound_name, username, 0)
+        # For URL sources, use more retries due to network instability
+        max_retries = if source_type == "url", do: 5, else: 3
+        play_with_retries(guild_id, play_input, play_type, play_options, sound_name, username, 0, max_retries)
       else
         Logger.error("Voice connection lost right before playback")
         broadcast_error("Voice-Verbindung verloren. Bitte erneut versuchen.")
@@ -337,12 +359,17 @@ defmodule SoundboardWeb.AudioPlayer do
          play_options,
          sound_name,
          username,
-         attempt
+         attempt,
+         max_retries \\ 3
        )
-       when attempt < 3 do
+       when attempt < max_retries do
     case Voice.play(guild_id, play_input, play_type, play_options) do
       :ok ->
-        Logger.info("Voice.play succeeded for #{sound_name} (attempt #{attempt + 1})")
+        Logger.info(
+          "Voice.play succeeded for #{sound_name} (attempt #{attempt + 1}) with volume: #{
+            inspect(play_options[:volume])
+          }"
+        )
 
         # Start monitoring connection health during playback
         # This helps detect and potentially recover from mid-playback issues
@@ -376,7 +403,8 @@ defmodule SoundboardWeb.AudioPlayer do
           play_options,
           sound_name,
           username,
-          attempt + 1
+          attempt + 1,
+          max_retries
         )
 
       {:error, "Must be connected to voice channel to play audio."} ->
@@ -389,7 +417,8 @@ defmodule SoundboardWeb.AudioPlayer do
           play_options,
           sound_name,
           username,
-          attempt
+          attempt,
+          max_retries
         )
 
       {:error, reason} ->
@@ -409,7 +438,8 @@ defmodule SoundboardWeb.AudioPlayer do
             play_options,
             sound_name,
             username,
-            attempt + 1
+            attempt + 1,
+            max_retries
           )
         else
           broadcast_error("Fehler beim Abspielen: #{reason}")
@@ -425,12 +455,40 @@ defmodule SoundboardWeb.AudioPlayer do
          _play_options,
          sound_name,
          _username,
-         attempt
+         attempt,
+         max_retries
        ) do
-    Logger.error("Exceeded max retries (#{attempt}) for playing #{sound_name}")
-    broadcast_error("Failed to play sound after multiple attempts")
+    Logger.error("Exceeded max retries (#{max_retries}) for playing #{sound_name} (attempted #{attempt} times)")
+    broadcast_error("Fehler beim Abspielen nach mehreren Versuchen")
     :error
   end
+
+  # Validate URL accessibility before playback (non-blocking)
+  # This helps prevent glitches from network issues with URL-based sounds
+  # Note: This runs in background and doesn't block playback
+  defp validate_url_accessibility(url) when is_binary(url) do
+    try do
+      # Use HTTPoison to check if URL is accessible
+      # Only check HEAD request to minimize overhead
+      # Short timeout to avoid delaying playback
+      case HTTPoison.head(url, [], [timeout: 2000, recv_timeout: 2000]) do
+        {:ok, %{status_code: status}} when status in 200..399 ->
+          :ok
+        {:ok, %{status_code: status}} ->
+          {:error, "URL returned status #{status}"}
+        {:error, %{reason: reason}} ->
+          {:error, "URL not accessible: #{inspect(reason)}"}
+      end
+    rescue
+      error ->
+        {:error, "URL validation error: #{inspect(error)}"}
+    catch
+      :exit, reason ->
+        {:error, "URL validation timeout: #{inspect(reason)}"}
+    end
+  end
+
+  defp validate_url_accessibility(_), do: {:error, "Invalid URL"}
 
   defp handle_voice_reconnect(
          guild_id,
@@ -439,7 +497,8 @@ defmodule SoundboardWeb.AudioPlayer do
          play_options,
          sound_name,
          username,
-         attempt
+         attempt,
+         max_retries
        ) do
     # Get the channel from state
     case GenServer.call(__MODULE__, :get_voice_channel) do
@@ -459,7 +518,8 @@ defmodule SoundboardWeb.AudioPlayer do
               play_options,
               sound_name,
               username,
-              attempt + 1
+              attempt + 1,
+              max_retries
             )
           else
             Logger.error("Failed to establish voice connection after rejoin")
@@ -503,11 +563,11 @@ defmodule SoundboardWeb.AudioPlayer do
     case :ets.lookup(:sound_meta_cache, sound_name) do
       [{^sound_name, %{source_type: "url"}}] ->
         Logger.info("Using URL directly for remote sound (cached)")
-        {path_or_url, :url}
+        {path_or_url, :url, "url"}
 
       [{^sound_name, %{source_type: "local"}}] ->
         Logger.info("Using raw path for local file with :url type (cached)")
-        {path_or_url, :url}
+        {path_or_url, :url, "local"}
 
       _ ->
         sound = Soundboard.Repo.get_by(Sound, filename: sound_name)
@@ -517,15 +577,15 @@ defmodule SoundboardWeb.AudioPlayer do
         case sound do
           %{source_type: "url"} ->
             Logger.info("Using URL directly for remote sound")
-            {path_or_url, :url}
+            {path_or_url, :url, "url"}
 
           %{source_type: "local"} ->
             Logger.info("Using raw path for local file with :url type")
-            {path_or_url, :url}
+            {path_or_url, :url, "local"}
 
           _ ->
             Logger.warning("Unknown source type, defaulting to raw path with :url type")
-            {path_or_url, :url}
+            {path_or_url, :url, "unknown"}
         end
     end
   end
