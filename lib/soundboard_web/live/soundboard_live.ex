@@ -70,7 +70,7 @@ defmodule SoundboardWeb.SoundboardLive do
     |> assign(:tag_input, "")
     |> assign(:tag_suggestions, [])
     |> assign(:show_upload_modal, false)
-    |> assign(:source_type, "local")
+    |> assign(:source_type, "url")
     |> assign(:upload_name, "")
     |> assign(:url, "")
     |> assign(:upload_tags, [])
@@ -271,7 +271,7 @@ defmodule SoundboardWeb.SoundboardLive do
          |> assign(:is_join_sound, false)
          |> assign(:is_leave_sound, false)
          |> assign(:upload_volume, 100)
-         |> assign(:source_type, "local")
+         |> assign(:source_type, "url")
          |> load_sound_files()
          |> put_flash(:info, "Sound added successfully")}
 
@@ -304,7 +304,7 @@ defmodule SoundboardWeb.SoundboardLive do
     {:noreply,
      socket
      |> assign(:show_upload_modal, true)
-     |> assign(:source_type, "local")
+     |> assign(:source_type, "url")
      |> assign(:upload_tags, [])
      |> assign(:upload_name, "")
      |> assign(:upload_tag_input, "")

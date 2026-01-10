@@ -11,7 +11,7 @@ defmodule SoundboardWeb.Live.UploadHandler do
   def validate_upload(socket, params) do
     params =
       params
-      |> Map.put_new("source_type", Map.get(socket.assigns, :source_type, "local"))
+      |> Map.put_new("source_type", Map.get(socket.assigns, :source_type, "url"))
       |> Map.put_new("name", nil)
       |> Map.put_new("url", nil)
 
@@ -96,7 +96,7 @@ defmodule SoundboardWeb.Live.UploadHandler do
 
   def handle_upload(socket, params, consume_uploaded_entries_fn) do
     user_id = socket.assigns.current_user.id
-    source_type = params["source_type"] || "local"
+    source_type = params["source_type"] || "url"
 
     case source_type do
       "url" ->
