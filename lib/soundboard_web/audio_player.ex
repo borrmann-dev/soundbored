@@ -4,10 +4,10 @@ defmodule SoundboardWeb.AudioPlayer do
   """
   use GenServer
   require Logger
+  alias HTTPoison
   alias Nostrum.Voice
   alias Soundboard.Accounts.User
   alias Soundboard.Sound
-  alias HTTPoison
 
   # System users that don't need play tracking
   @system_users ["System", "API User"]
@@ -247,78 +247,120 @@ defmodule SoundboardWeb.AudioPlayer do
   defp play_sound_with_connection(guild_id, sound_name, path_or_url, volume, username) do
     # Pre-validate voice connection state before attempting playback
     if validate_voice_state(guild_id) do
-      {play_input, play_type, source_type} = prepare_play_input(sound_name, path_or_url)
-
-      Logger.info(
-        "Calling Voice.play with guild_id: #{guild_id}, input: #{play_input}, type: #{play_type}, volume: #{volume}, source_type: #{source_type}"
-      )
-
-      # For URL-based sounds, validate URL accessibility before playback
-      # This helps prevent glitches from network issues
-      # Run validation in background to avoid blocking playback
-      if source_type == "url" do
-        spawn(fn ->
-          case validate_url_accessibility(play_input) do
-            :ok ->
-              Logger.info("URL validated and accessible: #{play_input}")
-            {:error, reason} ->
-              Logger.warning("URL validation failed: #{reason}, but playback may still work")
-          end
-        end)
-      end
-
-      # Double-check voice state right before playback
-      voice_ready = Voice.ready?(guild_id)
-      voice_playing = Voice.playing?(guild_id)
-      Logger.info("Voice ready: #{voice_ready}, Playing: #{voice_playing}")
-
-      # If something is still playing, wait longer to ensure clean transition
-      if voice_playing do
-        Logger.warning("Audio still playing, waiting for completion...")
-        wait_for_playback_completion(guild_id, 20, 150)
-        # Additional stabilization delay after previous playback ends
-        Process.sleep(100)
-      end
-
-      # Final stabilization check right before playback
-      # This ensures connection is absolutely ready
-      if Voice.ready?(guild_id) do
-        # For URL-based sounds, use longer delays to allow network connection to stabilize
-        # URL streaming requires network handshake which can cause initial glitches
-        stabilization_delay = if source_type == "url", do: 300, else: 100
-        Logger.info("Using stabilization delay: #{stabilization_delay}ms for #{source_type} source")
-        Process.sleep(stabilization_delay)
-
-        # Disable ffmpeg realtime processing to avoid `-re` pacing.
-        # Nostrum already paces via bursts; `-re` can cause latency buildup
-        # and slower cleanup of ffmpeg processes over time.
-        # Additional options for stability:
-        # - realtime: false prevents ffmpeg from pacing (Nostrum handles it)
-        # - Higher buffer (15 frames) compensates for network jitter
-        # - volume: clamp_volume ensures volume is in valid range (0.0-1.5)
-        #   Note: Nostrum's volume parameter should work for both local and URL sources
-        clamped_vol = clamp_volume(volume)
-        play_options = [
-          volume: clamped_vol,
-          realtime: false
-        ]
-
-        Logger.info("Play options: #{inspect(play_options)} (source_type: #{source_type}, original_volume: #{volume})")
-
-        # Keep track of attempts
-        # For URL sources, use more retries due to network instability
-        max_retries = if source_type == "url", do: 5, else: 3
-        play_with_retries(guild_id, play_input, play_type, play_options, sound_name, username, 0, max_retries)
-      else
-        Logger.error("Voice connection lost right before playback")
-        broadcast_error("Voice-Verbindung verloren. Bitte erneut versuchen.")
-        :error
-      end
+      do_play_sound_with_connection(guild_id, sound_name, path_or_url, volume, username)
     else
       Logger.error("Voice connection not in valid state for playback")
       broadcast_error("Voice-Verbindung nicht bereit. Bitte erneut versuchen.")
       :error
     end
+  end
+
+  defp do_play_sound_with_connection(guild_id, sound_name, path_or_url, volume, username) do
+    {play_input, play_type, source_type} = prepare_play_input(sound_name, path_or_url)
+
+    Logger.info(
+      "Calling Voice.play with guild_id: #{guild_id}, input: #{play_input}, type: #{play_type}, volume: #{volume}, source_type: #{source_type}"
+    )
+
+    # For URL-based sounds, validate URL accessibility before playback
+    # This helps prevent glitches from network issues
+    # Run validation in background to avoid blocking playback
+    validate_url_in_background(source_type, play_input)
+
+    # Double-check voice state right before playback
+    voice_ready = Voice.ready?(guild_id)
+    voice_playing = Voice.playing?(guild_id)
+    Logger.info("Voice ready: #{voice_ready}, Playing: #{voice_playing}")
+
+    # If something is still playing, wait longer to ensure clean transition
+    wait_for_previous_playback(guild_id, voice_playing)
+
+    # Final stabilization check right before playback
+    # This ensures connection is absolutely ready
+    if Voice.ready?(guild_id) do
+      execute_playback(guild_id, play_input, play_type, source_type, volume, sound_name, username)
+    else
+      Logger.error("Voice connection lost right before playback")
+      broadcast_error("Voice-Verbindung verloren. Bitte erneut versuchen.")
+      :error
+    end
+  end
+
+  defp validate_url_in_background("url", play_input) do
+    spawn(fn -> handle_url_validation(play_input) end)
+  end
+
+  defp validate_url_in_background(_source_type, _play_input), do: :ok
+
+  defp handle_url_validation(play_input) do
+    case validate_url_accessibility(play_input) do
+      :ok ->
+        Logger.info("URL validated and accessible: #{play_input}")
+
+      {:error, reason} ->
+        Logger.warning("URL validation failed: #{reason}, but playback may still work")
+    end
+  end
+
+  defp wait_for_previous_playback(_guild_id, false), do: :ok
+
+  defp wait_for_previous_playback(guild_id, true) do
+    Logger.warning("Audio still playing, waiting for completion...")
+    wait_for_playback_completion(guild_id, 20, 150)
+    # Additional stabilization delay after previous playback ends
+    Process.sleep(100)
+  end
+
+  defp execute_playback(
+         guild_id,
+         play_input,
+         play_type,
+         source_type,
+         volume,
+         sound_name,
+         username
+       ) do
+    # For URL-based sounds, use longer delays to allow network connection to stabilize
+    # URL streaming requires network handshake which can cause initial glitches
+    stabilization_delay = if source_type == "url", do: 300, else: 100
+
+    Logger.info("Using stabilization delay: #{stabilization_delay}ms for #{source_type} source")
+
+    Process.sleep(stabilization_delay)
+
+    # Disable ffmpeg realtime processing to avoid `-re` pacing.
+    # Nostrum already paces via bursts; `-re` can cause latency buildup
+    # and slower cleanup of ffmpeg processes over time.
+    # Additional options for stability:
+    # - realtime: false prevents ffmpeg from pacing (Nostrum handles it)
+    # - Higher buffer (15 frames) compensates for network jitter
+    # - volume: clamp_volume ensures volume is in valid range (0.0-1.5)
+    #   Note: Nostrum's volume parameter should work for both local and URL sources
+    clamped_vol = clamp_volume(volume)
+
+    play_options = [
+      volume: clamped_vol,
+      realtime: false
+    ]
+
+    Logger.info(
+      "Play options: #{inspect(play_options)} (source_type: #{source_type}, original_volume: #{volume})"
+    )
+
+    # Keep track of attempts
+    # For URL sources, use more retries due to network instability
+    max_retries = if source_type == "url", do: 5, else: 3
+
+    play_with_retries(
+      guild_id,
+      play_input,
+      play_type,
+      play_options,
+      sound_name,
+      username,
+      0,
+      max_retries
+    )
   end
 
   # Validate that voice connection is in a good state for playback
@@ -360,15 +402,13 @@ defmodule SoundboardWeb.AudioPlayer do
          sound_name,
          username,
          attempt,
-         max_retries \\ 3
+         max_retries
        )
        when attempt < max_retries do
     case Voice.play(guild_id, play_input, play_type, play_options) do
       :ok ->
         Logger.info(
-          "Voice.play succeeded for #{sound_name} (attempt #{attempt + 1}) with volume: #{
-            inspect(play_options[:volume])
-          }"
+          "Voice.play succeeded for #{sound_name} (attempt #{attempt + 1}) with volume: #{inspect(play_options[:volume])}"
         )
 
         # Start monitoring connection health during playback
@@ -458,7 +498,10 @@ defmodule SoundboardWeb.AudioPlayer do
          attempt,
          max_retries
        ) do
-    Logger.error("Exceeded max retries (#{max_retries}) for playing #{sound_name} (attempted #{attempt} times)")
+    Logger.error(
+      "Exceeded max retries (#{max_retries}) for playing #{sound_name} (attempted #{attempt} times)"
+    )
+
     broadcast_error("Fehler beim Abspielen nach mehreren Versuchen")
     :error
   end
@@ -467,25 +510,25 @@ defmodule SoundboardWeb.AudioPlayer do
   # This helps prevent glitches from network issues with URL-based sounds
   # Note: This runs in background and doesn't block playback
   defp validate_url_accessibility(url) when is_binary(url) do
-    try do
-      # Use HTTPoison to check if URL is accessible
-      # Only check HEAD request to minimize overhead
-      # Short timeout to avoid delaying playback
-      case HTTPoison.head(url, [], [timeout: 2000, recv_timeout: 2000]) do
-        {:ok, %{status_code: status}} when status in 200..399 ->
-          :ok
-        {:ok, %{status_code: status}} ->
-          {:error, "URL returned status #{status}"}
-        {:error, %{reason: reason}} ->
-          {:error, "URL not accessible: #{inspect(reason)}"}
-      end
-    rescue
-      error ->
-        {:error, "URL validation error: #{inspect(error)}"}
-    catch
-      :exit, reason ->
-        {:error, "URL validation timeout: #{inspect(reason)}"}
+    # Use HTTPoison to check if URL is accessible
+    # Only check HEAD request to minimize overhead
+    # Short timeout to avoid delaying playback
+    case HTTPoison.head(url, [], timeout: 2000, recv_timeout: 2000) do
+      {:ok, %{status_code: status}} when status in 200..399 ->
+        :ok
+
+      {:ok, %{status_code: status}} ->
+        {:error, "URL returned status #{status}"}
+
+      {:error, %{reason: reason}} ->
+        {:error, "URL not accessible: #{inspect(reason)}"}
     end
+  rescue
+    error ->
+      {:error, "URL validation error: #{inspect(error)}"}
+  catch
+    :exit, reason ->
+      {:error, "URL validation timeout: #{inspect(reason)}"}
   end
 
   defp validate_url_accessibility(_), do: {:error, "Invalid URL"}
