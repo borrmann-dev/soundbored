@@ -268,9 +268,12 @@ defmodule SoundboardWeb.AudioPlayer do
     validate_url_in_background(source_type, play_input)
 
     # Double-check voice state right before playback
+    timestamp_before_state_check = System.monotonic_time(:millisecond)
     voice_ready = Voice.ready?(guild_id)
     voice_playing = Voice.playing?(guild_id)
-    Logger.info("Voice ready: #{voice_ready}, Playing: #{voice_playing}")
+    Logger.info(
+      "Voice state check - Ready: #{voice_ready}, Playing: #{voice_playing}, Timestamp: #{timestamp_before_state_check}ms, Source: #{source_type}, Input: #{inspect(play_input)}"
+    )
 
     # If something is still playing, wait longer to ensure clean transition
     wait_for_previous_playback(guild_id, voice_playing)
@@ -325,15 +328,36 @@ defmodule SoundboardWeb.AudioPlayer do
     # Both local and URL sources benefit from this delay
     stabilization_delay = 200
 
-    Logger.info("Using stabilization delay: #{stabilization_delay}ms for #{source_type} source")
+    timestamp_before_delay = System.monotonic_time(:millisecond)
+    Logger.info(
+      "Using stabilization delay: #{stabilization_delay}ms for #{source_type} source - Voice ready before: #{Voice.ready?(guild_id)}, Playing: #{Voice.playing?(guild_id)}"
+    )
 
     Process.sleep(stabilization_delay)
 
+    timestamp_after_delay = System.monotonic_time(:millisecond)
+    actual_delay = timestamp_after_delay - timestamp_before_delay
+
     # Additional pre-playback check to ensure voice connection is absolutely ready
     # This double-check helps prevent glitches from unstable connections
-    if not Voice.ready?(guild_id) do
-      Logger.warning("Voice not ready after stabilization, waiting additional 100ms...")
+    voice_ready_after_delay = Voice.ready?(guild_id)
+    voice_playing_after_delay = Voice.playing?(guild_id)
+
+    if not voice_ready_after_delay do
+      Logger.warning(
+        "Voice not ready after stabilization (delay: #{actual_delay}ms), waiting additional 100ms... - Ready: #{voice_ready_after_delay}, Playing: #{voice_playing_after_delay}"
+      )
       Process.sleep(100)
+
+      voice_ready_after_extra = Voice.ready?(guild_id)
+      voice_playing_after_extra = Voice.playing?(guild_id)
+      Logger.info(
+        "After extra wait - Ready: #{voice_ready_after_extra}, Playing: #{voice_playing_after_extra}"
+      )
+    else
+      Logger.info(
+        "Voice ready after stabilization (delay: #{actual_delay}ms) - Ready: #{voice_ready_after_delay}, Playing: #{voice_playing_after_delay}"
+      )
     end
 
     # Disable ffmpeg realtime processing to avoid `-re` pacing.
@@ -397,12 +421,18 @@ defmodule SoundboardWeb.AudioPlayer do
     actual_frames = Application.get_env(:nostrum, :audio_frames_per_burst, :not_set)
     actual_timeout = Application.get_env(:nostrum, :audio_timeout, :not_set)
 
+    timestamp_before_play = System.monotonic_time(:millisecond)
+
     Logger.info(
       "Play options: #{inspect(play_options)} (source_type: #{source_type}, original_volume: #{volume})"
     )
 
     Logger.info(
-      "Nostrum Config Check - frames_per_burst: #{inspect(actual_frames)}, timeout: #{inspect(actual_timeout)}"
+      "Nostrum Config Check - frames_per_burst: #{inspect(actual_frames)}, timeout: #{inspect(actual_timeout)}, ffmpeg args count: #{length(play_options[:executable_args] || [])}"
+    )
+
+    Logger.info(
+      "Pre-playback state - Ready: #{Voice.ready?(guild_id)}, Playing: #{Voice.playing?(guild_id)}, Timestamp: #{timestamp_before_play}ms"
     )
 
     # Keep track of attempts
@@ -465,10 +495,24 @@ defmodule SoundboardWeb.AudioPlayer do
          max_retries
        )
        when attempt < max_retries do
+    # Log detailed state before playback attempt
+    voice_ready_before = Voice.ready?(guild_id)
+    voice_playing_before = Voice.playing?(guild_id)
+    timestamp_before = System.monotonic_time(:millisecond)
+
+    Logger.info(
+      "Voice.play attempt #{attempt + 1}/#{max_retries} - Ready: #{voice_ready_before}, Playing: #{voice_playing_before}, Input: #{inspect(play_input)}, Type: #{inspect(play_type)}"
+    )
+
     case Voice.play(guild_id, play_input, play_type, play_options) do
       :ok ->
+        timestamp_after = System.monotonic_time(:millisecond)
+        play_duration = timestamp_after - timestamp_before
+        voice_ready_after = Voice.ready?(guild_id)
+        voice_playing_after = Voice.playing?(guild_id)
+
         Logger.info(
-          "Voice.play succeeded for #{sound_name} (attempt #{attempt + 1}) with volume: #{inspect(play_options[:volume])}"
+          "Voice.play succeeded for #{sound_name} (attempt #{attempt + 1}) - Duration: #{play_duration}ms, Ready: #{voice_ready_after}, Playing: #{voice_playing_after}, Volume: #{inspect(play_options[:volume])}"
         )
 
         # Start monitoring connection health during playback
@@ -480,20 +524,40 @@ defmodule SoundboardWeb.AudioPlayer do
         :ok
 
       {:error, "Audio already playing in voice channel."} ->
-        Logger.warning("Audio still playing on attempt #{attempt + 1}, stopping and retrying...")
+        timestamp_error = System.monotonic_time(:millisecond)
+        Logger.warning(
+          "Audio still playing on attempt #{attempt + 1}, stopping and retrying... - Ready: #{Voice.ready?(guild_id)}, Playing: #{Voice.playing?(guild_id)}, Timestamp: #{timestamp_error}ms"
+        )
         # Force stop the current audio
         Voice.stop(guild_id)
         # Longer delay to ensure stop completes and connection stabilizes
         # Exponential backoff with longer delays: 200ms, 400ms, 600ms
         stop_delay = 200 * (attempt + 1)
+        Logger.info("Waiting #{stop_delay}ms after stop before retry...")
         Process.sleep(stop_delay)
 
         # Verify stop completed before retrying
-        if Voice.playing?(guild_id) do
-          Logger.warning("Audio still playing after stop, waiting longer...")
+        voice_playing_after_stop = Voice.playing?(guild_id)
+        voice_ready_after_stop = Voice.ready?(guild_id)
+        timestamp_after_stop = System.monotonic_time(:millisecond)
+
+        if voice_playing_after_stop do
+          Logger.warning(
+            "Audio still playing after stop (delay: #{stop_delay}ms), waiting longer... - Ready: #{voice_ready_after_stop}, Playing: #{voice_playing_after_stop}, Timestamp: #{timestamp_after_stop}ms"
+          )
           Process.sleep(300)
           Voice.stop(guild_id)
           Process.sleep(200)
+
+          voice_playing_after_extra = Voice.playing?(guild_id)
+          voice_ready_after_extra = Voice.ready?(guild_id)
+          Logger.info(
+            "After extra stop wait - Ready: #{voice_ready_after_extra}, Playing: #{voice_playing_after_extra}"
+          )
+        else
+          Logger.info(
+            "Audio stopped successfully after #{stop_delay}ms - Ready: #{voice_ready_after_stop}, Playing: #{voice_playing_after_stop}"
+          )
         end
 
         play_with_retries(
@@ -522,7 +586,13 @@ defmodule SoundboardWeb.AudioPlayer do
         )
 
       {:error, reason} ->
-        Logger.error("Voice.play failed: #{inspect(reason)} (attempt #{attempt + 1})")
+        timestamp_error = System.monotonic_time(:millisecond)
+        voice_ready_on_error = Voice.ready?(guild_id)
+        voice_playing_on_error = Voice.playing?(guild_id)
+
+        Logger.error(
+          "Voice.play failed: #{inspect(reason)} (attempt #{attempt + 1}/#{max_retries}) - Ready: #{voice_ready_on_error}, Playing: #{voice_playing_on_error}, Timestamp: #{timestamp_error}ms, Input: #{inspect(play_input)}"
+        )
 
         # Try to recover from specific error types
         recovered = attempt_recovery(guild_id, reason, attempt)
@@ -792,14 +862,23 @@ defmodule SoundboardWeb.AudioPlayer do
     if check_count < 30 and Voice.playing?(guild_id) do
       Process.sleep(2000)
 
+      # Detailed connection health check
+      voice_ready = Voice.ready?(guild_id)
+      voice_playing = Voice.playing?(guild_id)
+      timestamp = System.monotonic_time(:millisecond)
+
+      Logger.info(
+        "Playback monitor check #{check_count + 1}/30 for #{sound_name} - Ready: #{voice_ready}, Playing: #{voice_playing}, Timestamp: #{timestamp}ms"
+      )
+
       # Check if connection is still healthy
-      if Voice.ready?(guild_id) do
+      if voice_ready do
         # Connection is healthy, continue monitoring
         monitor_playback_connection(guild_id, sound_name, check_count + 1)
       else
-        # Connection lost during playback - log warning
+        # Connection lost during playback - log warning with details
         Logger.warning(
-          "Voice connection lost during playback of #{sound_name} (check #{check_count + 1})"
+          "Voice connection lost during playback of #{sound_name} (check #{check_count + 1}/30) - Ready: #{voice_ready}, Playing: #{voice_playing}, Timestamp: #{timestamp}ms"
         )
 
         # Try to continue monitoring in case it recovers
@@ -807,8 +886,17 @@ defmodule SoundboardWeb.AudioPlayer do
       end
     else
       # Monitoring complete or playback stopped
+      voice_ready_final = Voice.ready?(guild_id)
+      voice_playing_final = Voice.playing?(guild_id)
+
       if check_count >= 30 do
-        Logger.debug("Playback monitoring completed for #{sound_name}")
+        Logger.info(
+          "Playback monitoring completed for #{sound_name} after 30 checks - Final state: Ready: #{voice_ready_final}, Playing: #{voice_playing_final}"
+        )
+      else
+        Logger.info(
+          "Playback stopped for #{sound_name} after #{check_count} checks - Final state: Ready: #{voice_ready_final}, Playing: #{voice_playing_final}"
+        )
       end
     end
   end
