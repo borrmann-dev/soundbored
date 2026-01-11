@@ -125,7 +125,28 @@ defmodule SoundboardWeb.Live.UploadHandler do
       is_leave_sound: params["is_leave_sound"] == "true"
     }
 
+    # Start background download of URL sound for caching
+    # This ensures the file is ready when first played
+    Task.start(fn ->
+      download_url_sound_background(sound_params.filename, params["url"])
+    end)
+
     handle_sound_transaction(sound_params, user_id, socket)
+  end
+
+  # Background download of URL sound for caching
+  defp download_url_sound_background(sound_name, url) do
+    require Logger
+    Logger.info("Background downloading URL sound: #{url}")
+
+    # Use AudioPlayer's download function
+    case SoundboardWeb.AudioPlayer.download_and_cache_url_sound(sound_name, url) do
+      {:ok, _path} ->
+        Logger.info("Background download completed for: #{sound_name}")
+
+      {:error, reason} ->
+        Logger.warning("Background download failed for #{sound_name}: #{inspect(reason)}")
+    end
   end
 
   defp handle_local_upload(socket, params, user_id, consume_uploaded_entries_fn) do

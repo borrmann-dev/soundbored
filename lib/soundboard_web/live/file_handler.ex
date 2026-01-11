@@ -55,7 +55,10 @@ defmodule SoundboardWeb.Live.FileHandler do
 
     case sound.source_type do
       "url" ->
-        # For URL sounds, just delete the database record
+        # For URL sounds, delete cached file if it exists, then delete DB record
+        # Invalidate cache to clean up cached files
+        SoundboardWeb.AudioPlayer.invalidate_cache(sound.filename)
+
         case Repo.delete(sound) do
           {:ok, _} ->
             broadcast_update()
@@ -68,6 +71,9 @@ defmodule SoundboardWeb.Live.FileHandler do
       "local" ->
         # For local sounds, delete both file and database record
         file_path = Path.join(@upload_directory, sound.filename)
+
+        # Also invalidate cache to clean up any cached URL files
+        SoundboardWeb.AudioPlayer.invalidate_cache(sound.filename)
 
         with :ok <- File.rm(file_path),
              {:ok, _} <- maybe_delete_record(sound) do

@@ -162,7 +162,58 @@ https://soundbored.k8s.borrmann.dev/auth/discord/callback
 2. Check `AUTO_JOIN=true` if you want auto-join
 3. Use `!join` command in Discord
 
-### Audio Dropouts / Network Issues
+### Audio Glitches / Dropouts / Speed Drift
+
+**Root Cause:**
+Nostrum v0.11.0-dev (master branch) erwartet **Opus-Frames**, nicht PCM! 
+
+**WICHTIG**: `executable_args` existiert **NICHT** in Nostrum v0.11.0-dev! Die Optionen sind:
+- `start_pos`, `duration`, `realtime` (default `true`), `volume`, `filter`
+
+Wenn man versucht, FFmpeg mit nicht-existierenden Optionen zu konfigurieren, werden diese ignoriert, was zu inkonsistentem Verhalten führt.
+
+**Lösung: Korrekte Nostrum v0.11.0-dev Konfiguration**
+
+1. **Korrekte `play_options`:**
+   ```elixir
+   play_options = [
+     volume: clamped_vol,
+     realtime: true,  # Default ist true, explizit setzen für Klarheit
+     filter: "aresample=48000, aformat=sample_fmts=s16:channel_layouts=stereo"
+   ]
+   ```
+   - `filter` ist der einzige Weg, Audioformat in Nostrum zu fixieren
+   - `realtime: true` verhindert, dass FFmpeg "so schnell wie möglich" produziert
+
+2. **Stabiles Buffering:**
+   - `audio_frames_per_burst: 20` (400ms Buffer) für bessere Stabilität
+   - Default ist 10, aber 20 ist stabiler bei Netzwerk-Jitter und VM Docker Jitter
+   - Nur `audio_frames_per_burst: 1` für ultra-kurze Sounds (< 200ms)
+
+3. **URL-Sounds optimieren:**
+   - **Problem**: URL-Sounds werden direkt gestreamt, was bei Netzwerk-Issues zu Glitches führt
+   - **Lösung**: URL-Sounds sollten serverseitig runtergeladen/gecacht werden, dann lokal abgespielt
+   - Aktuell: URL-Sounds werden direkt gestreamt (kann zu Dropouts führen)
+
+4. **Monitoring reduzieren:**
+   - Playback-Monitoring alle 2 Sekunden kann bei mehreren Sounds zu viel Last erzeugen
+   - URL-Validation beim Playback entfernt (nur beim Caching, nicht beim Abspielen)
+
+**Konfiguration:**
+- `config/runtime.exs`, `config/dev.exs`, `config/prod.exs`: `audio_frames_per_burst: 20`
+- `lib/soundboard_web/audio_player.ex`: `play_options` mit `filter`, `realtime: true`, `volume`
+
+**Erwartetes Ergebnis:**
+- Stabiler Tempo (kein Speed Drift)
+- Keine Warble/Glitches
+- Keine fehlenden Fragmente
+- Keine zufälligen Stillephasen
+- Keine Desynchronisation nach langem Playback
+
+**TODO: URL-Sound Caching**
+- URL-Sounds sollten beim Upload/Caching runtergeladen werden
+- Dann lokal abspielen statt direkt zu streamen
+- Das würde 80% der Dropouts bei URL-Sounds beseitigen
 
 **Discord Voice Protocol:**
 - Discord Voice verwendet **UDP** standardmäßig (nicht TCP)
@@ -173,26 +224,14 @@ https://soundbored.k8s.borrmann.dev/auth/discord/callback
 **Netzwerk-Optimierungen:**
 1. **Firewall**: Stelle sicher, dass UDP-Ports nicht blockiert sind
    - Discord Voice verwendet dynamische UDP-Ports (50000-65535)
-   - Keine festen Ports, daher schwer zu konfigurieren
    
 2. **NAT/Firewall**: Für beste Performance:
    - UDP sollte nicht blockiert werden
    - NAT sollte UDP-Traffic korrekt weiterleiten
-   - Keine aggressive UDP-Timeout-Konfiguration
-
-3. **System-Level**: 
-   - Netzwerk-Buffer können erhöht werden (OS-abhängig)
-   - QoS/Priorität für UDP-Traffic setzen (falls möglich)
-
-4. **Application-Level** (bereits implementiert):
-   - `audio_frames_per_burst: 10` (200ms Buffer) - kompensiert Paketverluste
-   - Längere Timeouts und Stabilisierungsverzögerungen
-   - Mehrfache Verbindungsvalidierung
 
 **Wenn UDP blockiert ist:**
 - Discord fällt automatisch auf TCP zurück
 - Höhere Latenz, aber stabilere Verbindung
-- Keine Konfiguration nötig - passiert automatisch
 
 ### Check Logs
 

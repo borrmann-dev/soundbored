@@ -124,11 +124,11 @@ config :ueberauth, Ueberauth.Strategy.Discord.OAuth,
 config :soundboard,
   discord_token: System.get_env("DISCORD_TOKEN")
 
-# Configure Nostrum with optimized audio settings for reliable playback
+# Configure Nostrum for stable audio playback
 config :nostrum,
-  # Maximum buffer for absolute reliability (20 frames = 400ms)
-  # Very high buffer compensates for network jitter and UDP packet loss
-  # Increased from 15 to 20 for even better stability
+  # 20 frames (400ms) is more stable for network jitter and VM Docker jitter
+  # Default is 10, but 20 provides better stability for soundboards
+  # Only use 1 for ultra-short sounds (< 200ms) that sometimes get swallowed
   audio_frames_per_burst: 20,
   # Increased timeout for more reliable connection handling
   audio_timeout: 30_000

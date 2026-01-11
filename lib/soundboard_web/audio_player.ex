@@ -262,15 +262,15 @@ defmodule SoundboardWeb.AudioPlayer do
       "Calling Voice.play with guild_id: #{guild_id}, input: #{play_input}, type: #{play_type}, volume: #{volume}, source_type: #{source_type}"
     )
 
-    # For URL-based sounds, validate URL accessibility before playback
-    # This helps prevent glitches from network issues
-    # Run validation in background to avoid blocking playback
-    validate_url_in_background(source_type, play_input)
+    # Note: URL validation removed from playback path to reduce load
+    # URL sounds should be downloaded/cached before playback for best stability
+    # Current implementation streams directly from URL (can cause glitches on network issues)
 
     # Double-check voice state right before playback
     timestamp_before_state_check = System.monotonic_time(:millisecond)
     voice_ready = Voice.ready?(guild_id)
     voice_playing = Voice.playing?(guild_id)
+
     Logger.info(
       "Voice state check - Ready: #{voice_ready}, Playing: #{voice_playing}, Timestamp: #{timestamp_before_state_check}ms, Source: #{source_type}, Input: #{inspect(play_input)}"
     )
@@ -286,22 +286,6 @@ defmodule SoundboardWeb.AudioPlayer do
       Logger.error("Voice connection lost right before playback")
       broadcast_error("Voice-Verbindung verloren. Bitte erneut versuchen.")
       :error
-    end
-  end
-
-  defp validate_url_in_background("url", play_input) do
-    spawn(fn -> handle_url_validation(play_input) end)
-  end
-
-  defp validate_url_in_background(_source_type, _play_input), do: :ok
-
-  defp handle_url_validation(play_input) do
-    case validate_url_accessibility(play_input) do
-      :ok ->
-        Logger.info("URL validated and accessible: #{play_input}")
-
-      {:error, reason} ->
-        Logger.warning("URL validation failed: #{reason}, but playback may still work")
     end
   end
 
@@ -329,6 +313,7 @@ defmodule SoundboardWeb.AudioPlayer do
     stabilization_delay = 200
 
     timestamp_before_delay = System.monotonic_time(:millisecond)
+
     Logger.info(
       "Using stabilization delay: #{stabilization_delay}ms for #{source_type} source - Voice ready before: #{Voice.ready?(guild_id)}, Playing: #{Voice.playing?(guild_id)}"
     )
@@ -343,78 +328,46 @@ defmodule SoundboardWeb.AudioPlayer do
     voice_ready_after_delay = Voice.ready?(guild_id)
     voice_playing_after_delay = Voice.playing?(guild_id)
 
-    if not voice_ready_after_delay do
+    if voice_ready_after_delay do
+      Logger.info(
+        "Voice ready after stabilization (delay: #{actual_delay}ms) - Ready: #{voice_ready_after_delay}, Playing: #{voice_playing_after_delay}"
+      )
+    else
       Logger.warning(
         "Voice not ready after stabilization (delay: #{actual_delay}ms), waiting additional 100ms... - Ready: #{voice_ready_after_delay}, Playing: #{voice_playing_after_delay}"
       )
+
       Process.sleep(100)
 
       voice_ready_after_extra = Voice.ready?(guild_id)
       voice_playing_after_extra = Voice.playing?(guild_id)
+
       Logger.info(
         "After extra wait - Ready: #{voice_ready_after_extra}, Playing: #{voice_playing_after_extra}"
       )
-    else
-      Logger.info(
-        "Voice ready after stabilization (delay: #{actual_delay}ms) - Ready: #{voice_ready_after_delay}, Playing: #{voice_playing_after_delay}"
-      )
     end
 
-    # Disable ffmpeg realtime processing to avoid `-re` pacing.
-    # Nostrum already paces via bursts; `-re` can cause latency buildup
-    # and slower cleanup of ffmpeg processes over time.
-    # Additional options for stability:
-    # - realtime: false prevents ffmpeg from pacing (Nostrum handles it)
-    # - Higher buffer (20 frames = 400ms) compensates for network jitter
-    # - volume: clamp_volume ensures volume is in valid range (0.0-1.5)
-    # - executable_args: Force Opus codec for Discord-native audio format
-    #   Note: Discord uses Opus natively, so using it directly avoids transcoding
-    #   and improves quality while reducing glitches
+    # Nostrum v0.11.0-dev (master branch) - correct configuration
+    #
+    # Important: executable_args does NOT exist in Nostrum v0.11.0-dev!
+    # Valid options are: start_pos, duration, realtime (default true), volume, filter
+    #
+    # realtime: true (default) - FFmpeg outputs at real-time pace, not "as fast as possible"
+    # This is usually correct to prevent FFmpeg from producing too fast
+    #
+    # filter: Use this to fix audio format (only way in Nostrum to control format)
+    # aresample=48000: Resample to 48kHz (Discord requirement)
+    # aformat=sample_fmts=s16:channel_layouts=stereo: 16-bit signed, stereo
+    #
+    # audio_frames_per_burst: 20 is more stable for network jitter and VM Docker jitter
+    # 10 is default, 1 only for ultra-short sounds that sometimes get swallowed
     clamped_vol = clamp_volume(volume)
 
-    # Discord Voice Protocol requires EXACT format - any deviation causes glitches
-    # Discord expects: PCM 16-bit signed, 48kHz, Stereo, Little Endian, 20ms frames
-    # This equals: 48000 Samples/sec, 960 Samples/Channel/Frame, 1920 Samples total/Frame
-    # 1920 * 2 Bytes = 3840 Bytes/Frame, 50 Frames/sec
-    #
-    # Most common glitch causes:
-    # - 44.1 kHz instead of 48 kHz
-    # - Mono instead of Stereo
-    # - Float PCM instead of 16-bit signed
-    # - Unsynchronized frame timing
-    # - Missing aresample=async=1
-    #
-    # Solution: Use proven stable FFmpeg pipeline:
-    # -f s16le (16-bit signed little endian PCM)
-    # -ar 48000 (48kHz sample rate)
-    # -ac 2 (Stereo, 2 channels)
-    # -af aresample=async=1:first_pts=0 (async resampling for clean frame timing)
-    #
-    # Audio Pipeline:
-    # 1. FFmpeg converts input to PCM 16-bit signed, 48kHz, Stereo (this step)
-    # 2. Nostrum receives PCM and converts it to Opus for Discord
-    # 3. Discord receives Opus-encoded audio
-    #
-    # We output PCM (not Opus) because Nostrum handles Opus encoding internally.
-    # This ensures Nostrum can properly control the Opus encoding process.
+    # Correct play options for Nostrum v0.11.0-dev
     play_options = [
       volume: clamped_vol,
-      realtime: false,
-      executable_args: [
-        # Output format: 16-bit signed little endian PCM (Discord's expected format)
-        "-f",
-        "s16le",
-        # Sample rate: 48kHz (MUST be 48kHz, not 44.1kHz)
-        "-ar",
-        "48000",
-        # Channels: Stereo (MUST be 2 channels, not mono)
-        "-ac",
-        "2",
-        # Audio filter: Async resampling with first_pts=0 for clean frame timing
-        # This prevents unsynchronized frames that cause glitches
-        "-af",
-        "aresample=async=1:first_pts=0"
-      ]
+      realtime: true,
+      filter: "aresample=48000, aformat=sample_fmts=s16:channel_layouts=stereo"
     ]
 
     # Log actual Nostrum config values to verify they're loaded
@@ -428,11 +381,15 @@ defmodule SoundboardWeb.AudioPlayer do
     )
 
     Logger.info(
-      "Nostrum Config Check - frames_per_burst: #{inspect(actual_frames)}, timeout: #{inspect(actual_timeout)}, ffmpeg args count: #{length(play_options[:executable_args] || [])}"
+      "Nostrum Config - frames_per_burst: #{inspect(actual_frames)} (20 recommended for stability), timeout: #{inspect(actual_timeout)}"
     )
 
     Logger.info(
       "Pre-playback state - Ready: #{Voice.ready?(guild_id)}, Playing: #{Voice.playing?(guild_id)}, Timestamp: #{timestamp_before_play}ms"
+    )
+
+    Logger.info(
+      "Using Nostrum filter for audio format - realtime: true, filter: #{play_options[:filter]}"
     )
 
     # Keep track of attempts
@@ -515,9 +472,9 @@ defmodule SoundboardWeb.AudioPlayer do
           "Voice.play succeeded for #{sound_name} (attempt #{attempt + 1}) - Duration: #{play_duration}ms, Ready: #{voice_ready_after}, Playing: #{voice_playing_after}, Volume: #{inspect(play_options[:volume])}"
         )
 
-        # Start monitoring connection health during playback
-        # This helps detect and potentially recover from mid-playback issues
-        start_playback_monitoring(guild_id, sound_name)
+        # Monitoring disabled to reduce load - can cause jitter with multiple sounds
+        # If needed, enable only for debugging or error cases
+        # start_playback_monitoring(guild_id, sound_name)
 
         track_play_if_needed(sound_name, username)
         broadcast_success(sound_name, username)
@@ -525,9 +482,11 @@ defmodule SoundboardWeb.AudioPlayer do
 
       {:error, "Audio already playing in voice channel."} ->
         timestamp_error = System.monotonic_time(:millisecond)
+
         Logger.warning(
           "Audio still playing on attempt #{attempt + 1}, stopping and retrying... - Ready: #{Voice.ready?(guild_id)}, Playing: #{Voice.playing?(guild_id)}, Timestamp: #{timestamp_error}ms"
         )
+
         # Force stop the current audio
         Voice.stop(guild_id)
         # Longer delay to ensure stop completes and connection stabilizes
@@ -545,12 +504,14 @@ defmodule SoundboardWeb.AudioPlayer do
           Logger.warning(
             "Audio still playing after stop (delay: #{stop_delay}ms), waiting longer... - Ready: #{voice_ready_after_stop}, Playing: #{voice_playing_after_stop}, Timestamp: #{timestamp_after_stop}ms"
           )
+
           Process.sleep(300)
           Voice.stop(guild_id)
           Process.sleep(200)
 
           voice_playing_after_extra = Voice.playing?(guild_id)
           voice_ready_after_extra = Voice.ready?(guild_id)
+
           Logger.info(
             "After extra stop wait - Ready: #{voice_ready_after_extra}, Playing: #{voice_playing_after_extra}"
           )
@@ -636,33 +597,6 @@ defmodule SoundboardWeb.AudioPlayer do
     :error
   end
 
-  # Validate URL accessibility before playback (non-blocking)
-  # This helps prevent glitches from network issues with URL-based sounds
-  # Note: This runs in background and doesn't block playback
-  defp validate_url_accessibility(url) when is_binary(url) do
-    # Use HTTPoison to check if URL is accessible
-    # Only check HEAD request to minimize overhead
-    # Short timeout to avoid delaying playback
-    case HTTPoison.head(url, [], timeout: 2000, recv_timeout: 2000) do
-      {:ok, %{status_code: status}} when status in 200..399 ->
-        :ok
-
-      {:ok, %{status_code: status}} ->
-        {:error, "URL returned status #{status}"}
-
-      {:error, %{reason: reason}} ->
-        {:error, "URL not accessible: #{inspect(reason)}"}
-    end
-  rescue
-    error ->
-      {:error, "URL validation error: #{inspect(error)}"}
-  catch
-    :exit, reason ->
-      {:error, "URL validation timeout: #{inspect(reason)}"}
-  end
-
-  defp validate_url_accessibility(_), do: {:error, "Invalid URL"}
-
   defp handle_voice_reconnect(
          guild_id,
          play_input,
@@ -734,32 +668,44 @@ defmodule SoundboardWeb.AudioPlayer do
   defp prepare_play_input(sound_name, path_or_url) do
     # Prefer cached metadata to avoid DB on hot path
     case :ets.lookup(:sound_meta_cache, sound_name) do
-      [{^sound_name, %{source_type: "url"}}] ->
-        Logger.info("Using URL directly for remote sound (cached)")
-        {path_or_url, :url, "url"}
+      [{^sound_name, %{source_type: "local", input: cached_path}}] ->
+        # Use cached local file (either original local file or downloaded URL cache)
+        Logger.info("Using cached local file: #{cached_path}")
+        {cached_path, :url, "local"}
 
-      [{^sound_name, %{source_type: "local"}}] ->
-        Logger.info("Using raw path for local file with :url type (cached)")
-        {path_or_url, :url, "local"}
+      [{^sound_name, %{source_type: "url", input: url}}] ->
+        # Fallback: URL not yet cached, use direct streaming
+        Logger.info("Using URL directly for remote sound (not yet cached): #{url}")
+        {url, :url, "url"}
 
       _ ->
-        sound = Soundboard.Repo.get_by(Sound, filename: sound_name)
-        Logger.info("Playing sound (uncached): #{inspect(sound)}")
-        Logger.info("Original path/URL: #{path_or_url}")
+        # Not in cache, resolve and cache (will download URL sounds)
+        resolve_and_prepare_play_input(sound_name, path_or_url)
+    end
+  end
 
-        case sound do
-          %{source_type: "url"} ->
-            Logger.info("Using URL directly for remote sound")
-            {path_or_url, :url, "url"}
+  # Resolve sound path and prepare play input
+  defp resolve_and_prepare_play_input(sound_name, path_or_url) do
+    case get_sound_path(sound_name) do
+      {:ok, {resolved_path, _volume}} ->
+        determine_play_input_type(resolved_path)
 
-          %{source_type: "local"} ->
-            Logger.info("Using raw path for local file with :url type")
-            {path_or_url, :url, "local"}
+      {:error, reason} ->
+        Logger.error("Failed to resolve sound path: #{inspect(reason)}")
+        # Fallback to original path_or_url
+        {path_or_url, :url, "unknown"}
+    end
+  end
 
-          _ ->
-            Logger.warning("Unknown source type, defaulting to raw path with :url type")
-            {path_or_url, :url, "unknown"}
-        end
+  # Determine if resolved path is URL or local file
+  defp determine_play_input_type(resolved_path) do
+    if String.starts_with?(resolved_path, "http://") or
+         String.starts_with?(resolved_path, "https://") do
+      Logger.info("Using URL directly (download in progress): #{resolved_path}")
+      {resolved_path, :url, "url"}
+    else
+      Logger.info("Using resolved local file: #{resolved_path}")
+      {resolved_path, :url, "local"}
     end
   end
 
@@ -849,57 +795,6 @@ defmodule SoundboardWeb.AudioPlayer do
 
   # Monitor voice connection health during active playback
   # This helps detect connection issues that might cause glitches
-  defp start_playback_monitoring(guild_id, sound_name) do
-    # Spawn a monitoring process that checks connection health
-    # every 2 seconds while audio is playing
-    spawn(fn ->
-      monitor_playback_connection(guild_id, sound_name, 0)
-    end)
-  end
-
-  defp monitor_playback_connection(guild_id, sound_name, check_count) do
-    # Stop monitoring after 30 checks (60 seconds) or if playback stopped
-    if check_count < 30 and Voice.playing?(guild_id) do
-      Process.sleep(2000)
-
-      # Detailed connection health check
-      voice_ready = Voice.ready?(guild_id)
-      voice_playing = Voice.playing?(guild_id)
-      timestamp = System.monotonic_time(:millisecond)
-
-      Logger.info(
-        "Playback monitor check #{check_count + 1}/30 for #{sound_name} - Ready: #{voice_ready}, Playing: #{voice_playing}, Timestamp: #{timestamp}ms"
-      )
-
-      # Check if connection is still healthy
-      if voice_ready do
-        # Connection is healthy, continue monitoring
-        monitor_playback_connection(guild_id, sound_name, check_count + 1)
-      else
-        # Connection lost during playback - log warning with details
-        Logger.warning(
-          "Voice connection lost during playback of #{sound_name} (check #{check_count + 1}/30) - Ready: #{voice_ready}, Playing: #{voice_playing}, Timestamp: #{timestamp}ms"
-        )
-
-        # Try to continue monitoring in case it recovers
-        monitor_playback_connection(guild_id, sound_name, check_count + 1)
-      end
-    else
-      # Monitoring complete or playback stopped
-      voice_ready_final = Voice.ready?(guild_id)
-      voice_playing_final = Voice.playing?(guild_id)
-
-      if check_count >= 30 do
-        Logger.info(
-          "Playback monitoring completed for #{sound_name} after 30 checks - Final state: Ready: #{voice_ready_final}, Playing: #{voice_playing_final}"
-        )
-      else
-        Logger.info(
-          "Playback stopped for #{sound_name} after #{check_count} checks - Final state: Ready: #{voice_ready_final}, Playing: #{voice_playing_final}"
-        )
-      end
-    end
-  end
 
   # Attempt to recover from specific error conditions
   defp attempt_recovery(guild_id, reason, attempt) when attempt < 2 do
@@ -970,29 +865,228 @@ defmodule SoundboardWeb.AudioPlayer do
         {:error, "Sound not found"}
 
       %{source_type: "url", url: url, volume: volume} when is_binary(url) ->
-        Logger.info("Found URL sound: #{url}")
-        meta = %{source_type: "url", input: url, volume: volume || 1.0}
-        cache_sound(sound_name, meta)
-        {:ok, {meta.input, meta.volume}}
+        resolve_url_sound(sound_name, url, volume)
 
       %{source_type: "local", filename: filename, volume: volume} when is_binary(filename) ->
-        path = resolve_upload_path(filename)
-        Logger.info("Resolved local file path: #{path}")
-
-        if File.exists?(path) do
-          meta = %{source_type: "local", input: path, volume: volume || 1.0}
-          cache_sound(sound_name, meta)
-          {:ok, {meta.input, meta.volume}}
-        else
-          Logger.error("Local file not found: #{path}")
-          {:error, "Sound file not found at #{path}"}
-        end
+        resolve_local_sound(sound_name, filename, volume)
 
       sound ->
         Logger.error("Invalid sound configuration: #{inspect(sound)}")
         {:error, "Invalid sound configuration"}
     end
   end
+
+  # Resolve and cache URL sound
+  defp resolve_url_sound(sound_name, url, volume) do
+    Logger.info("Found URL sound: #{url}")
+    # Download and cache URL sound locally for stable playback
+    case download_and_cache_url_sound(sound_name, url) do
+      {:ok, local_path} ->
+        cache_and_return_sound(sound_name, "local", local_path, volume)
+
+      {:error, reason} ->
+        Logger.error("Failed to download URL sound #{url}: #{inspect(reason)}")
+        # Fallback to direct URL streaming if download fails
+        cache_and_return_sound(sound_name, "url", url, volume)
+    end
+  end
+
+  # Resolve and cache local sound
+  defp resolve_local_sound(sound_name, filename, volume) do
+    path = resolve_upload_path(filename)
+    Logger.info("Resolved local file path: #{path}")
+
+    if File.exists?(path) do
+      cache_and_return_sound(sound_name, "local", path, volume)
+    else
+      Logger.error("Local file not found: #{path}")
+      {:error, "Sound file not found at #{path}"}
+    end
+  end
+
+  # Cache sound metadata and return result
+  defp cache_and_return_sound(sound_name, source_type, input, volume) do
+    meta = %{source_type: source_type, input: input, volume: volume || 1.0}
+    cache_sound(sound_name, meta)
+    {:ok, {input, meta.volume}}
+  end
+
+  @doc false
+  # Download URL sound and cache it locally for stable playback
+  # Called from UploadHandler for background downloads
+  def download_and_cache_url_sound(sound_name, url) do
+    # Generate cache filename based on sound name and URL hash
+    url_hash = :crypto.hash(:md5, url) |> Base.encode16(case: :lower) |> String.slice(0, 8)
+    extension = url_file_extension(url) || ".mp3"
+    cache_filename = "#{sound_name}_#{url_hash}#{extension}"
+    cache_path = resolve_upload_path(cache_filename)
+
+    # Check if already cached and verify it's still valid
+    if File.exists?(cache_path) do
+      # Check if file needs refresh by comparing ETag/Last-Modified headers
+      case check_cache_validity(url, cache_path) do
+        :valid ->
+          Logger.info("URL sound already cached and valid: #{cache_path}")
+          {:ok, cache_path}
+
+        :needs_refresh ->
+          Logger.info("Cached file outdated, re-downloading: #{cache_path}")
+          # Delete old cache file and download fresh
+          File.rm(cache_path)
+          download_fresh(url, cache_path)
+      end
+    else
+      download_fresh(url, cache_path)
+    end
+  end
+
+  # Download fresh file (used for first-time download or cache refresh)
+  defp download_fresh(url, cache_path) do
+    # Download in background to avoid blocking
+    Task.start(fn ->
+      Logger.info("Downloading URL sound to cache: #{url} -> #{cache_path}")
+      download_url_to_file(url, cache_path)
+    end)
+
+    # For first-time access, try to download synchronously with timeout
+    # If it takes too long, fall back to streaming
+    case download_url_to_file(url, cache_path, timeout: 10_000) do
+      :ok ->
+        Logger.info("URL sound cached successfully: #{cache_path}")
+        {:ok, cache_path}
+
+      {:error, :timeout} ->
+        Logger.warning("URL download timeout, will use streaming for now")
+        {:error, :timeout}
+
+      {:error, reason} ->
+        Logger.warning("URL download failed: #{inspect(reason)}, will use streaming")
+        {:error, reason}
+    end
+  end
+
+  # Check if cached file is still valid by comparing ETag header
+  # ETag is the most reliable way to detect content changes
+  defp check_cache_validity(url, cache_path) do
+    # Check server headers to see if file changed
+    case HTTPoison.head(url, [], follow_redirect: true, timeout: 5_000) do
+      {:ok, %HTTPoison.Response{status_code: 200, headers: headers}} ->
+        validate_etag(headers, cache_path)
+
+      {:ok, %HTTPoison.Response{status_code: status}} ->
+        Logger.warning("HEAD request failed with status #{status}, assuming cache valid")
+        :valid
+
+      {:error, reason} ->
+        # Network error, assume cache is valid to avoid unnecessary downloads
+        Logger.warning("HEAD request failed: #{inspect(reason)}, assuming cache valid")
+        :valid
+    end
+  end
+
+  # Validate ETag header against cached ETag
+  defp validate_etag(headers, cache_path) do
+    etag = get_header(headers, "etag")
+
+    if etag != nil do
+      compare_etag(etag, cache_path)
+    else
+      # No ETag available, assume cache is valid (conservative approach)
+      :valid
+    end
+  end
+
+  # Compare server ETag with cached ETag
+  defp compare_etag(etag, cache_path) do
+    etag_file = cache_path <> ".etag"
+    cached_etag = read_cached_etag(etag_file)
+
+    if cached_etag == etag do
+      :valid
+    else
+      # ETag changed, update and mark for refresh
+      File.write(etag_file, etag)
+      Logger.info("ETag changed (#{cached_etag} -> #{etag}), cache needs refresh")
+      :needs_refresh
+    end
+  end
+
+  # Read cached ETag from file
+  defp read_cached_etag(etag_file) do
+    if File.exists?(etag_file), do: File.read!(etag_file) |> String.trim(), else: nil
+  end
+
+  # Helper to get header value (case-insensitive)
+  defp get_header(headers, key) do
+    key_lower = String.downcase(key)
+    Enum.find_value(headers, fn {k, v} -> if String.downcase(k) == key_lower, do: v end)
+  end
+
+  # Save ETag to file for future cache validation
+  defp save_etag_if_available(dest_path, response) do
+    etag = get_header(response.headers, "etag")
+
+    if etag != nil do
+      etag_file = dest_path <> ".etag"
+      File.write(etag_file, etag)
+      Logger.debug("Saved ETag for cache validation: #{etag_file}")
+    end
+  end
+
+  # Download URL to local file
+  defp download_url_to_file(url, dest_path, opts \\ []) do
+    timeout = Keyword.get(opts, :timeout, 30_000)
+
+    case HTTPoison.get(url, [], recv_timeout: timeout, follow_redirect: true) do
+      {:ok, %HTTPoison.Response{status_code: 200, body: body} = response} ->
+        # Ensure directory exists
+        File.mkdir_p!(Path.dirname(dest_path))
+
+        case File.write(dest_path, body) do
+          :ok ->
+            Logger.info("Downloaded URL sound to: #{dest_path} (#{byte_size(body)} bytes)")
+            # Save ETag if available for future cache validation
+            save_etag_if_available(dest_path, response)
+            :ok
+
+          {:error, reason} ->
+            Logger.error("Failed to write cached file: #{inspect(reason)}")
+            {:error, reason}
+        end
+
+      {:ok, %HTTPoison.Response{status_code: status}} ->
+        Logger.error("URL returned non-200 status: #{status}")
+        {:error, "HTTP #{status}"}
+
+      {:error, %HTTPoison.Error{reason: :timeout}} ->
+        {:error, :timeout}
+
+      {:error, %HTTPoison.Error{reason: reason}} ->
+        Logger.error("HTTP request failed: #{inspect(reason)}")
+        {:error, reason}
+    end
+  end
+
+  # Extract file extension from URL (same logic as UploadHandler)
+  defp url_file_extension(url) when is_binary(url) do
+    # Try to get extension from URL path
+    case URI.parse(url) do
+      %URI{path: path} when is_binary(path) ->
+        ext = Path.extname(path)
+
+        if ext in ~w(.mp3 .wav .ogg .m4a .flac .aac) do
+          ext
+        else
+          # Default to .mp3 if no extension found
+          ".mp3"
+        end
+
+      _ ->
+        ".mp3"
+    end
+  end
+
+  defp url_file_extension(_), do: ".mp3"
 
   defp resolve_upload_path(filename) do
     if File.exists?("/app/priv/static/uploads") do
@@ -1005,9 +1099,25 @@ defmodule SoundboardWeb.AudioPlayer do
 
   @doc """
   Removes any cached metadata for the given `sound_name` so future plays use fresh data.
+  Also cleans up cached files for URL sounds if they exist.
   """
   def invalidate_cache(sound_name) when is_binary(sound_name) do
     ensure_sound_cache()
+
+    # Check if there's a cached file for this sound
+    case :ets.lookup(:sound_meta_cache, sound_name) do
+      [{^sound_name, %{source_type: "local", input: cached_path}}] ->
+        # Check if this is a URL cache file (contains hash pattern)
+        if String.contains?(Path.basename(cached_path), "_") do
+          # Try to delete cached file (ignore errors if file doesn't exist)
+          File.rm(cached_path)
+          Logger.info("Deleted cached URL file: #{cached_path}")
+        end
+
+      _ ->
+        :ok
+    end
+
     :ets.delete(:sound_meta_cache, sound_name)
     :ok
   end

@@ -111,9 +111,9 @@ if config_env() == :prod and is_nil(System.get_env("SKIP_RUNTIME_CONFIG")) do
     {path, 0} ->
       config :nostrum,
         ffmpeg: String.trim(path),
-        # Maximum buffer for absolute reliability (20 frames = 400ms)
-        # Very high buffer compensates for network jitter and UDP packet loss
-        # Increased from 15 to 20 for even better stability
+        # 20 frames (400ms) is more stable for network jitter and VM Docker jitter
+        # Default is 10, but 20 provides better stability for soundboards
+        # Only use 1 for ultra-short sounds (< 200ms) that sometimes get swallowed
         audio_frames_per_burst: 20,
         # Increased timeout for more reliable connection handling
         audio_timeout: 30_000
