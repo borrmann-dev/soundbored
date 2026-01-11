@@ -914,29 +914,114 @@ defmodule SoundboardWeb.AudioPlayer do
   @doc false
   # Download URL sound and cache it locally for stable playback
   # Called from UploadHandler for background downloads
-  def download_and_cache_url_sound(sound_name, url) do
-    # Generate cache filename based on sound name and URL hash
-    url_hash = :crypto.hash(:md5, url) |> Base.encode16(case: :lower) |> String.slice(0, 8)
+  def download_and_cache_url_sound(_sound_name, url) do
+    # Generate URL hash for cache lookup
+    url_hash = :crypto.hash(:md5, url) |> Base.encode16(case: :lower) |> String.slice(0, 16)
     extension = url_file_extension(url) || ".mp3"
-    cache_filename = "#{sound_name}_#{url_hash}#{extension}"
+
+    # First, try to find existing cached file by hash (ignoring timestamp)
+    case find_cached_file_by_hash(url_hash, extension) do
+      {:found, existing_path} ->
+        # Found existing cache, verify it's still valid
+        case check_cache_validity(url, existing_path) do
+          :valid ->
+            Logger.info("URL sound already cached and valid: #{existing_path}")
+            {:ok, existing_path}
+
+          :needs_refresh ->
+            Logger.info("Cached file outdated, re-downloading: #{existing_path}")
+            # Delete old cache file and download fresh
+            File.rm(existing_path)
+            File.rm(existing_path <> ".etag")
+            download_fresh_with_timestamp(url, url_hash, extension)
+        end
+
+      :not_found ->
+        # No existing cache, download fresh
+        download_fresh_with_timestamp(url, url_hash, extension)
+    end
+  end
+
+  # Find existing cached file by hash (ignoring timestamp in filename)
+  defp find_cached_file_by_hash(url_hash, extension) do
+    # Get upload directory path
+    upload_dir =
+      if File.exists?("/app/priv/static/uploads") do
+        "/app/priv/static/uploads"
+      else
+        priv_dir = :code.priv_dir(:soundboard)
+        Path.join([priv_dir, "static/uploads"])
+      end
+
+    case File.ls(upload_dir) do
+      {:ok, files} ->
+        # Look for files matching pattern: url_{hash}_*.{ext}
+        pattern = "url_#{url_hash}_"
+
+        matching_file =
+          Enum.find(files, fn file ->
+            String.starts_with?(file, pattern) and String.ends_with?(file, extension)
+          end)
+
+        case matching_file do
+          nil -> :not_found
+          filename -> {:found, resolve_upload_path(filename)}
+        end
+
+      {:error, _} ->
+        :not_found
+    end
+  end
+
+  # Download fresh file with timestamp in filename
+  # Also cleans up old versions with the same hash
+  defp download_fresh_with_timestamp(url, url_hash, extension) do
+    # Clean up old cache files with the same hash before downloading new one
+    cleanup_old_cache_files(url_hash, extension)
+
+    timestamp = System.system_time(:second)
+    cache_filename = "url_#{url_hash}_#{timestamp}#{extension}"
     cache_path = resolve_upload_path(cache_filename)
 
-    # Check if already cached and verify it's still valid
-    if File.exists?(cache_path) do
-      # Check if file needs refresh by comparing ETag/Last-Modified headers
-      case check_cache_validity(url, cache_path) do
-        :valid ->
-          Logger.info("URL sound already cached and valid: #{cache_path}")
-          {:ok, cache_path}
+    download_fresh(url, cache_path)
+  end
 
-        :needs_refresh ->
-          Logger.info("Cached file outdated, re-downloading: #{cache_path}")
-          # Delete old cache file and download fresh
-          File.rm(cache_path)
-          download_fresh(url, cache_path)
+  # Clean up old cache files with the same hash
+  # This prevents accumulation of old cache files when URLs are re-downloaded
+  defp cleanup_old_cache_files(url_hash, extension) do
+    upload_dir =
+      if File.exists?("/app/priv/static/uploads") do
+        "/app/priv/static/uploads"
+      else
+        priv_dir = :code.priv_dir(:soundboard)
+        Path.join([priv_dir, "static/uploads"])
       end
-    else
-      download_fresh(url, cache_path)
+
+    pattern = "url_#{url_hash}_"
+
+    case File.ls(upload_dir) do
+      {:ok, files} ->
+        # Find all files matching this hash pattern
+        old_files =
+          files
+          |> Enum.filter(fn file ->
+            String.starts_with?(file, pattern) and String.ends_with?(file, extension)
+          end)
+          |> Enum.map(fn filename ->
+            file_path = resolve_upload_path(filename)
+            etag_path = file_path <> ".etag"
+            {file_path, etag_path}
+          end)
+
+        # Delete all old cache files (we're about to download a fresh one)
+        Enum.each(old_files, fn {file_path, etag_path} ->
+          File.rm(file_path)
+          File.rm(etag_path)
+          Logger.debug("Cleaned up old cache file: #{Path.basename(file_path)}")
+        end)
+
+      {:error, _} ->
+        :ok
     end
   end
 
@@ -1107,11 +1192,12 @@ defmodule SoundboardWeb.AudioPlayer do
     # Check if there's a cached file for this sound
     case :ets.lookup(:sound_meta_cache, sound_name) do
       [{^sound_name, %{source_type: "local", input: cached_path}}] ->
-        # Check if this is a URL cache file (contains hash pattern)
-        if String.contains?(Path.basename(cached_path), "_") do
-          # Try to delete cached file (ignore errors if file doesn't exist)
+        # Check if this is a URL cache file (starts with "url_")
+        if String.starts_with?(Path.basename(cached_path), "url_") do
+          # Try to delete cached file and ETag file (ignore errors if files don't exist)
           File.rm(cached_path)
-          Logger.info("Deleted cached URL file: #{cached_path}")
+          File.rm(cached_path <> ".etag")
+          Logger.info("Deleted cached URL file and ETag: #{cached_path}")
         end
 
       _ ->
