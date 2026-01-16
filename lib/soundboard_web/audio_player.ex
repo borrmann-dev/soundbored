@@ -755,25 +755,34 @@ defmodule SoundboardWeb.AudioPlayer do
 
   # Background task to refresh URL cache
   defp refresh_url_cache_background(sound_name, url, old_cache_path) do
+    Logger.info("Starting background cache refresh for: #{sound_name} from #{url}")
     # Delete old cache files
     File.rm(old_cache_path)
     File.rm(old_cache_path <> ".etag")
+    Logger.debug("Deleted old cache files: #{Path.basename(old_cache_path)}")
 
     # Get volume from database and download fresh
     case Soundboard.Repo.get_by(Sound, filename: sound_name) do
       %{volume: volume} ->
+        Logger.info("Downloading updated version: #{url}")
+
         case download_and_cache_url_sound(sound_name, url) do
           {:ok, new_path} ->
-            Logger.info("URL cache refreshed successfully: #{new_path}")
+            Logger.info(
+              "URL cache refreshed successfully: #{new_path} (old: #{Path.basename(old_cache_path)})"
+            )
+
             # Update cache metadata with new path
             cache_and_return_sound(sound_name, "local", new_path, volume)
 
           {:error, reason} ->
-            Logger.warning("Background cache refresh failed: #{inspect(reason)}")
+            Logger.warning(
+              "Background cache refresh failed for #{sound_name}: #{inspect(reason)}"
+            )
         end
 
       _ ->
-        Logger.warning("Could not find sound in database for cache refresh")
+        Logger.warning("Could not find sound in database for cache refresh: #{sound_name}")
     end
   end
 
@@ -1208,9 +1217,11 @@ defmodule SoundboardWeb.AudioPlayer do
   # Check if cached file is still valid by comparing ETag header
   # ETag is the most reliable way to detect content changes
   defp check_cache_validity(url, cache_path) do
+    Logger.info("Checking cache validity with HEAD request: #{url}")
     # Check server headers to see if file changed
     case HTTPoison.head(url, [], follow_redirect: true, timeout: 5_000) do
       {:ok, %HTTPoison.Response{status_code: 200, headers: headers}} ->
+        Logger.debug("HEAD request successful, validating ETag")
         validate_etag(headers, cache_path)
 
       {:ok, %HTTPoison.Response{status_code: status}} ->
@@ -1242,11 +1253,16 @@ defmodule SoundboardWeb.AudioPlayer do
     cached_etag = read_cached_etag(etag_file)
 
     if cached_etag == etag do
+      Logger.debug("ETag matches (#{etag}), cache is valid")
       :valid
     else
       # ETag changed, update and mark for refresh
       File.write(etag_file, etag)
-      Logger.info("ETag changed (#{cached_etag} -> #{etag}), cache needs refresh")
+
+      Logger.info(
+        "ETag changed (#{inspect(cached_etag)} -> #{inspect(etag)}), cache needs refresh"
+      )
+
       :needs_refresh
     end
   end
