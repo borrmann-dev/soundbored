@@ -28,55 +28,79 @@ defmodule SoundboardWeb.Live.FileFilter do
 
   defp filter_by_tags_for_random(files, _tags), do: files
 
-  # Normalize query by removing extra whitespace and converting to lowercase
-  defp normalize_query(query) when is_binary(query) do
-    query
-    |> String.trim()
-    |> String.replace(~r/\s+/, " ")
-    |> String.downcase()
-  end
-
-  defp normalize_query(_), do: ""
-
-  # Normalize text for fuzzy matching by removing extra whitespace
-  defp normalize_text(text) when is_binary(text) do
+  # Normalize by removing all separators and converting to lowercase
+  defp normalize(text) when is_binary(text) do
     text
-    |> String.replace(~r/\s+/, " ")
+    # Remove all whitespace and separators
+    |> String.replace(~r/[\s_\-\.]+/, "")
     |> String.downcase()
   end
 
-  defp normalize_text(_), do: ""
+  defp normalize(_), do: ""
 
   defp filter_by_search(files, ""), do: files
 
   defp filter_by_search(files, query) do
-    normalized_query = normalize_query(query)
+    normalized_query = normalize(query)
 
     if normalized_query == "" do
       files
     else
-      Enum.filter(files, &matches_query?(&1, normalized_query))
+      # Extract words from original query (before normalization removes separators)
+      query_words = extract_words(query)
+      Enum.filter(files, &matches_query?(&1, normalized_query, query_words))
     end
   end
 
-  defp matches_query?(file, normalized_query) do
-    filename_normalized = normalize_text(file.filename)
-    filename_matches = String.contains?(filename_normalized, normalized_query)
-
-    tag_matches =
-      Enum.any?(file.tags || [], fn tag ->
-        tag_normalized = normalize_text(tag.name)
-        String.contains?(tag_normalized, normalized_query)
-      end)
-
-    keyword_matches =
-      Enum.any?(file.keywords || [], fn kw ->
-        keyword_normalized = normalize_text(kw.keyword)
-        String.contains?(keyword_normalized, normalized_query)
-      end)
-
-    filename_matches || tag_matches || keyword_matches
+  # Extract words from query by splitting on separators
+  defp extract_words(query) when is_binary(query) do
+    query
+    |> String.trim()
+    |> String.split(~r/[\s_\-\.]+/, trim: true)
+    |> Enum.map(&String.downcase/1)
+    |> Enum.filter(&(&1 != ""))
   end
+
+  defp extract_words(_), do: []
+
+  defp matches_query?(file, normalized_query, query_words) do
+    # Check filename, tags, and keywords with the same simple logic
+    matches?(file.filename, normalized_query, query_words) ||
+      Enum.any?(file.tags || [], &matches?(&1.name, normalized_query, query_words)) ||
+      Enum.any?(file.keywords || [], &matches?(&1.keyword, normalized_query, query_words))
+  end
+
+  # Versatile matching: full query substring OR all words appear OR fuzzy match
+  defp matches?(text, normalized_query, query_words) do
+    normalized_text = normalize(text)
+
+    String.contains?(normalized_text, normalized_query) ||
+      all_words_present?(normalized_text, query_words) ||
+      fuzzy_match?(normalized_text, normalized_query)
+  end
+
+  # Check if all query words appear in text (in any order)
+  defp all_words_present?(_text, []), do: false
+  defp all_words_present?(text, words), do: Enum.all?(words, &String.contains?(text, &1))
+
+  # Fuzzy match: all query characters appear in order (allows gaps)
+  # Example: "fun" matches "funny", "test" matches "testing"
+  defp fuzzy_match?(text, query) when byte_size(query) < 2, do: String.contains?(text, query)
+
+  defp fuzzy_match?(text, query) do
+    text_chars = String.graphemes(text)
+    query_chars = String.graphemes(query)
+    chars_in_order?(text_chars, query_chars)
+  end
+
+  # Check if all query chars appear in order in text (allowing gaps)
+  defp chars_in_order?(_text, []), do: true
+  defp chars_in_order?([], _query), do: false
+
+  defp chars_in_order?([t | text_rest], [q | query_rest]) when t == q,
+    do: chars_in_order?(text_rest, query_rest)
+
+  defp chars_in_order?([_t | text_rest], query), do: chars_in_order?(text_rest, query)
 
   # Group files into tagged matches and other matches
   defp group_by_tags(files, []) do
