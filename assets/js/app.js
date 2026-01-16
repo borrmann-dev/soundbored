@@ -123,13 +123,16 @@ Hooks.LocalPlayer = {
     event.preventDefault()
     event.stopPropagation()
 
+    // If clicking the same button that's currently playing, stop it
     if (this.audio && !this.audio.paused) {
       this.stopPlayback()
       return
     }
 
+    // If a different audio is already playing, block the new request
     if (activeLocalPlayer && activeLocalPlayer !== this) {
-      activeLocalPlayer.stopPlayback()
+      // Don't play new sound - one is already playing
+      return
     }
 
     await this.startPlayback()

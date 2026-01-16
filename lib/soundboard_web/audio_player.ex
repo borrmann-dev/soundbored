@@ -52,9 +52,38 @@ defmodule SoundboardWeb.AudioPlayer do
     Logger.info("Initializing AudioPlayer with state: #{inspect(state)}")
     # Create a fast in-memory cache for sound metadata
     ensure_sound_cache()
+    # Recover voice channel state from DiscordHandler if available
+    recovered_state = recover_voice_channel_state(state)
     # Schedule periodic voice connection check
     schedule_voice_check()
-    {:ok, state}
+    {:ok, recovered_state}
+  end
+
+  # Recover voice channel state after restart by checking with DiscordHandler
+  defp recover_voice_channel_state(state) do
+    # Skip recovery in test environment where Discord isn't initialized
+    if Application.get_env(:soundboard, :env) == :test do
+      state
+    else
+      case SoundboardWeb.DiscordHandler.get_current_voice_channel() do
+        {guild_id, channel_id} when not is_nil(guild_id) and not is_nil(channel_id) ->
+          Logger.info("Recovered voice channel state: Guild #{guild_id}, Channel #{channel_id}")
+
+          %{state | voice_channel: {guild_id, channel_id}}
+
+        _ ->
+          Logger.debug("No voice channel to recover")
+          state
+      end
+    end
+  rescue
+    error ->
+      Logger.warning("Failed to recover voice channel state: #{inspect(error)}")
+      state
+  catch
+    :exit, _ ->
+      Logger.warning("DiscordHandler not available for voice channel recovery")
+      state
   end
 
   @impl true
@@ -73,14 +102,19 @@ defmodule SoundboardWeb.AudioPlayer do
   def handle_cast(:stop_sound, %{voice_channel: {guild_id, _channel_id}} = state) do
     Logger.info("Stopping all sounds in guild: #{guild_id}")
     Voice.stop(guild_id)
+
+    # Clear current_playback task if it exists
+    new_state = %{state | current_playback: nil}
+
     broadcast_success("All sounds stopped", "System")
-    {:noreply, state}
+    {:noreply, new_state}
   end
 
   def handle_cast(:stop_sound, state) do
     Logger.info("Attempted to stop sounds but no voice channel connected")
     broadcast_error("Bot is not connected to a voice channel")
-    {:noreply, state}
+    # Clear current_playback even if no voice channel
+    {:noreply, %{state | current_playback: nil}}
   end
 
   def handle_cast({:play_sound, _sound_name, _username}, %{voice_channel: nil} = state) do
@@ -92,10 +126,16 @@ defmodule SoundboardWeb.AudioPlayer do
         {:play_sound, sound_name, username},
         %{voice_channel: {guild_id, channel_id}} = state
       ) do
-    # More thorough check: wait a bit and check multiple times
-    # This prevents race conditions where audio just finished
-    if check_playing_with_retries(guild_id, 3, 50) do
-      Logger.info("Blocking sound #{sound_name} - another sound is already playing")
+    # Check if a sound is already playing or a playback task is active
+    # This ensures only one sound can play at a time with no queue
+    is_playing = check_playing_with_retries(guild_id, 3, 50)
+    has_active_task = state.current_playback != nil
+
+    if is_playing or has_active_task do
+      Logger.info(
+        "Blocking sound #{sound_name} - another sound is already playing (Voice.playing?: #{is_playing}, has_task: #{has_active_task})"
+      )
+
       broadcast_error("Ein Sound wird bereits abgespielt. Bitte warten...")
       {:noreply, state}
     else
@@ -116,8 +156,11 @@ defmodule SoundboardWeb.AudioPlayer do
   defp check_playing_with_retries(_guild_id, 0, _delay_ms), do: false
 
   defp start_sound_playback(state, guild_id, channel_id, sound_name, username) do
+    # Set current_playback immediately to block other requests
+    # This ensures no queue - if a sound is requested while another is playing, it's blocked
     case get_sound_path(sound_name) do
       {:ok, {path_or_url, volume}} ->
+        # Mark playback as active immediately to block concurrent requests
         task =
           Task.async(fn ->
             play_sound_task(guild_id, channel_id, sound_name, path_or_url, volume, username)
@@ -275,27 +318,35 @@ defmodule SoundboardWeb.AudioPlayer do
       "Voice state check - Ready: #{voice_ready}, Playing: #{voice_playing}, Timestamp: #{timestamp_before_state_check}ms, Source: #{source_type}, Input: #{inspect(play_input)}"
     )
 
-    # If something is still playing, wait longer to ensure clean transition
-    wait_for_previous_playback(guild_id, voice_playing)
+    # If something is still playing, abort - this should not happen if blocking works correctly
+    # but we check here as a safety measure
+    cond do
+      voice_playing ->
+        Logger.warning(
+          "Audio still playing when task started - this should be blocked at GenServer level"
+        )
 
-    # Final stabilization check right before playback
-    # This ensures connection is absolutely ready
-    if Voice.ready?(guild_id) do
-      execute_playback(guild_id, play_input, play_type, source_type, volume, sound_name, username)
-    else
-      Logger.error("Voice connection lost right before playback")
-      broadcast_error("Voice-Verbindung verloren. Bitte erneut versuchen.")
-      :error
+        broadcast_error("Ein Sound wird bereits abgespielt. Bitte warten...")
+        :error
+
+      Voice.ready?(guild_id) ->
+        # Final stabilization check right before playback
+        # This ensures connection is absolutely ready
+        execute_playback(
+          guild_id,
+          play_input,
+          play_type,
+          source_type,
+          volume,
+          sound_name,
+          username
+        )
+
+      true ->
+        Logger.error("Voice connection lost right before playback")
+        broadcast_error("Voice-Verbindung verloren. Bitte erneut versuchen.")
+        :error
     end
-  end
-
-  defp wait_for_previous_playback(_guild_id, false), do: :ok
-
-  defp wait_for_previous_playback(guild_id, true) do
-    Logger.warning("Audio still playing, waiting for completion...")
-    wait_for_playback_completion(guild_id, 20, 150)
-    # Additional stabilization delay after previous playback ends
-    Process.sleep(100)
   end
 
   defp execute_playback(
@@ -423,22 +474,6 @@ defmodule SoundboardWeb.AudioPlayer do
     # Stricter requirement for better reliability
     passing_checks = Enum.count(checks, & &1)
     passing_checks >= 6
-  end
-
-  # Wait for current playback to complete with timeout
-  defp wait_for_playback_completion(guild_id, max_attempts, delay_ms) when max_attempts > 0 do
-    if Voice.playing?(guild_id) do
-      Process.sleep(delay_ms)
-      wait_for_playback_completion(guild_id, max_attempts - 1, delay_ms)
-    else
-      Logger.info("Previous playback completed")
-      :ok
-    end
-  end
-
-  defp wait_for_playback_completion(_guild_id, 0, _delay_ms) do
-    Logger.warning("Timeout waiting for playback to complete")
-    :timeout
   end
 
   defp play_with_retries(
@@ -1030,23 +1065,42 @@ defmodule SoundboardWeb.AudioPlayer do
     # Download in background to avoid blocking
     Task.start(fn ->
       Logger.info("Downloading URL sound to cache: #{url} -> #{cache_path}")
-      download_url_to_file(url, cache_path)
+
+      try do
+        download_url_to_file(url, cache_path)
+      rescue
+        error ->
+          Logger.error("Background download task crashed: #{inspect(error)}")
+      catch
+        :exit, reason ->
+          Logger.error("Background download task exited: #{inspect(reason)}")
+      end
     end)
 
     # For first-time access, try to download synchronously with timeout
     # If it takes too long, fall back to streaming
-    case download_url_to_file(url, cache_path, timeout: 10_000) do
-      :ok ->
-        Logger.info("URL sound cached successfully: #{cache_path}")
-        {:ok, cache_path}
+    try do
+      case download_url_to_file(url, cache_path, timeout: 10_000) do
+        :ok ->
+          Logger.info("URL sound cached successfully: #{cache_path}")
+          {:ok, cache_path}
 
-      {:error, :timeout} ->
-        Logger.warning("URL download timeout, will use streaming for now")
-        {:error, :timeout}
+        {:error, :timeout} ->
+          Logger.warning("URL download timeout, will use streaming for now")
+          {:error, :timeout}
 
-      {:error, reason} ->
-        Logger.warning("URL download failed: #{inspect(reason)}, will use streaming")
-        {:error, reason}
+        {:error, reason} ->
+          Logger.warning("URL download failed: #{inspect(reason)}, will use streaming")
+          {:error, reason}
+      end
+    rescue
+      error ->
+        Logger.error("URL download crashed: #{inspect(error)}, will use streaming")
+        {:error, inspect(error)}
+    catch
+      :exit, reason ->
+        Logger.error("URL download exited: #{inspect(reason)}, will use streaming")
+        {:error, inspect(reason)}
     end
   end
 
@@ -1121,23 +1175,23 @@ defmodule SoundboardWeb.AudioPlayer do
   # Download URL to local file
   defp download_url_to_file(url, dest_path, opts \\ []) do
     timeout = Keyword.get(opts, :timeout, 30_000)
+    # Trim URL to prevent parsing errors from leading/trailing whitespace
+    trimmed_url = String.trim(url)
 
-    case HTTPoison.get(url, [], recv_timeout: timeout, follow_redirect: true) do
+    # Validate URL format before attempting download
+    if String.starts_with?(trimmed_url, ["http://", "https://"]) do
+      perform_http_download(trimmed_url, dest_path, timeout)
+    else
+      Logger.error("Invalid URL format: #{inspect(trimmed_url)}")
+      {:error, "Invalid URL format"}
+    end
+  end
+
+  # Perform the actual HTTP download
+  defp perform_http_download(trimmed_url, dest_path, timeout) do
+    case HTTPoison.get(trimmed_url, [], recv_timeout: timeout, follow_redirect: true) do
       {:ok, %HTTPoison.Response{status_code: 200, body: body} = response} ->
-        # Ensure directory exists
-        File.mkdir_p!(Path.dirname(dest_path))
-
-        case File.write(dest_path, body) do
-          :ok ->
-            Logger.info("Downloaded URL sound to: #{dest_path} (#{byte_size(body)} bytes)")
-            # Save ETag if available for future cache validation
-            save_etag_if_available(dest_path, response)
-            :ok
-
-          {:error, reason} ->
-            Logger.error("Failed to write cached file: #{inspect(reason)}")
-            {:error, reason}
-        end
+        write_downloaded_file(dest_path, body, response)
 
       {:ok, %HTTPoison.Response{status_code: status}} ->
         Logger.error("URL returned non-200 status: #{status}")
@@ -1148,6 +1202,24 @@ defmodule SoundboardWeb.AudioPlayer do
 
       {:error, %HTTPoison.Error{reason: reason}} ->
         Logger.error("HTTP request failed: #{inspect(reason)}")
+        {:error, reason}
+    end
+  end
+
+  # Write downloaded file to disk
+  defp write_downloaded_file(dest_path, body, response) do
+    # Ensure directory exists
+    File.mkdir_p!(Path.dirname(dest_path))
+
+    case File.write(dest_path, body) do
+      :ok ->
+        Logger.info("Downloaded URL sound to: #{dest_path} (#{byte_size(body)} bytes)")
+        # Save ETag if available for future cache validation
+        save_etag_if_available(dest_path, response)
+        :ok
+
+      {:error, reason} ->
+        Logger.error("Failed to write cached file: #{inspect(reason)}")
         {:error, reason}
     end
   end

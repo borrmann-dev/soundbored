@@ -6,7 +6,7 @@ const LocalPlayer = {
     this.el.addEventListener("click", () => {
       const filename = this.el.dataset.filename;
       
-      // If clicking the same button that's currently playing
+      // If clicking the same button that's currently playing, stop it
       if (LocalPlayer.currentButton === this.el && LocalPlayer.currentAudio) {
         // Stop the audio and reset the button
         LocalPlayer.currentAudio.pause();
@@ -17,11 +17,10 @@ const LocalPlayer = {
         return;
       }
 
-      // If a different audio is playing, stop it and reset its button
+      // If a different audio is already playing, block the new request
       if (LocalPlayer.currentAudio && LocalPlayer.currentButton) {
-        LocalPlayer.currentAudio.pause();
-        LocalPlayer.currentAudio.currentTime = 0;
-        LocalPlayer.currentButton.querySelector('svg').outerHTML = this.playIcon();
+        // Don't play new sound - one is already playing
+        return;
       }
 
       // Play the new audio
