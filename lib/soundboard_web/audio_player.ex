@@ -704,9 +704,19 @@ defmodule SoundboardWeb.AudioPlayer do
     # Prefer cached metadata to avoid DB on hot path
     case :ets.lookup(:sound_meta_cache, sound_name) do
       [{^sound_name, %{source_type: "local", input: cached_path}}] ->
-        # Use cached local file (either original local file or downloaded URL cache)
-        Logger.info("Using cached local file: #{cached_path}")
-        {cached_path, :url, "local"}
+        # Check if this cached local file is from a URL source
+        # If so, verify the URL source hasn't changed before using cache
+        case Soundboard.Repo.get_by(Sound, filename: sound_name) do
+          %{source_type: "url", url: url} when is_binary(url) ->
+            # This is a URL sound cached locally - verify it's still valid
+            Logger.info("Verifying URL source for cached file: #{url}")
+            verify_url_cache(sound_name, url, cached_path)
+
+          _ ->
+            # Original local file, use cache directly
+            Logger.info("Using cached local file: #{cached_path}")
+            {cached_path, :url, "local"}
+        end
 
       [{^sound_name, %{source_type: "url", input: url}}] ->
         # Fallback: URL not yet cached, use direct streaming
@@ -716,6 +726,54 @@ defmodule SoundboardWeb.AudioPlayer do
       _ ->
         # Not in cache, resolve and cache (will download URL sounds)
         resolve_and_prepare_play_input(sound_name, path_or_url)
+    end
+  end
+
+  # Verify URL cache is still valid, re-download if needed
+  defp verify_url_cache(sound_name, url, cached_path) do
+    case check_cache_validity(url, cached_path) do
+      :valid ->
+        Logger.info("URL cache is valid: #{cached_path}")
+        {cached_path, :url, "local"}
+
+      :needs_refresh ->
+        Logger.info("URL source changed, refreshing cache in background: #{url}")
+        # Start background download of new version
+        # Use old cache for immediate playback, new version will be ready for next play
+        Task.start(fn ->
+          refresh_url_cache_background(sound_name, url, cached_path)
+        end)
+
+        # Use old cache file for immediate playback (non-blocking)
+        Logger.info(
+          "Using old cache for immediate playback while new version downloads: #{cached_path}"
+        )
+
+        {cached_path, :url, "local"}
+    end
+  end
+
+  # Background task to refresh URL cache
+  defp refresh_url_cache_background(sound_name, url, old_cache_path) do
+    # Delete old cache files
+    File.rm(old_cache_path)
+    File.rm(old_cache_path <> ".etag")
+
+    # Get volume from database and download fresh
+    case Soundboard.Repo.get_by(Sound, filename: sound_name) do
+      %{volume: volume} ->
+        case download_and_cache_url_sound(sound_name, url) do
+          {:ok, new_path} ->
+            Logger.info("URL cache refreshed successfully: #{new_path}")
+            # Update cache metadata with new path
+            cache_and_return_sound(sound_name, "local", new_path, volume)
+
+          {:error, reason} ->
+            Logger.warning("Background cache refresh failed: #{inspect(reason)}")
+        end
+
+      _ ->
+        Logger.warning("Could not find sound in database for cache refresh")
     end
   end
 
@@ -914,7 +972,50 @@ defmodule SoundboardWeb.AudioPlayer do
   # Resolve and cache URL sound
   defp resolve_url_sound(sound_name, url, volume) do
     Logger.info("Found URL sound: #{url}")
-    # Download and cache URL sound locally for stable playback
+
+    # Always check if URL source has changed before playing
+    url_hash = :crypto.hash(:md5, url) |> Base.encode16(case: :lower) |> String.slice(0, 16)
+    extension = url_file_extension(url) || ".mp3"
+
+    case find_cached_file_by_hash(url_hash, extension) do
+      {:found, existing_path} ->
+        handle_existing_cache(sound_name, url, existing_path, volume)
+
+      :not_found ->
+        handle_missing_cache(sound_name, url, volume)
+    end
+  end
+
+  # Handle case when cached file exists
+  defp handle_existing_cache(sound_name, url, existing_path, volume) do
+    case check_cache_validity(url, existing_path) do
+      :valid ->
+        Logger.info("URL sound cache is valid: #{existing_path}")
+        cache_and_return_sound(sound_name, "local", existing_path, volume)
+
+      :needs_refresh ->
+        refresh_cache_and_use_old(sound_name, url, existing_path, volume)
+    end
+  end
+
+  # Refresh cache in background and use old cache for immediate playback
+  defp refresh_cache_and_use_old(sound_name, url, existing_path, volume) do
+    Logger.info("URL source changed, refreshing cache in background: #{url}")
+    # Start background download of new version
+    Task.start(fn ->
+      refresh_url_cache_background(sound_name, url, existing_path)
+    end)
+
+    # Use existing cache file for immediate playback (non-blocking)
+    Logger.info(
+      "Using existing cache for immediate playback while new version downloads: #{existing_path}"
+    )
+
+    cache_and_return_sound(sound_name, "local", existing_path, volume)
+  end
+
+  # Handle case when no cache exists
+  defp handle_missing_cache(sound_name, url, volume) do
     case download_and_cache_url_sound(sound_name, url) do
       {:ok, local_path} ->
         cache_and_return_sound(sound_name, "local", local_path, volume)
