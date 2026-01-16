@@ -51,8 +51,13 @@ defmodule SoundboardWeb.FavoritesLive do
 
   # Get filtered sounds based on search query and selected tags (public for template access)
   def filtered_sounds(assigns) do
-    assigns.sounds_with_tags
-    |> filter_files(assigns.search_query, assigns.selected_tags)
+    grouped = filter_files(assigns.sounds_with_tags, assigns.search_query, assigns.selected_tags)
+    grouped.tagged ++ grouped.other
+  end
+
+  # Get grouped filtered sounds (tagged vs other)
+  def filtered_sounds_grouped(assigns) do
+    filter_files(assigns.sounds_with_tags, assigns.search_query, assigns.selected_tags)
   end
 
   @impl true
@@ -79,8 +84,7 @@ defmodule SoundboardWeb.FavoritesLive do
 
     {:noreply,
      socket
-     |> assign(:selected_tags, selected_tags)
-     |> assign(:search_query, "")}
+     |> assign(:selected_tags, selected_tags)}
   end
 
   @impl true

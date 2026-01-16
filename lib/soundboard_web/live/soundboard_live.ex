@@ -14,7 +14,7 @@ defmodule SoundboardWeb.SoundboardLive do
 
   import TagHandler, only: [all_tags: 1, tag_selected?: 2]
 
-  import FileFilter, only: [filter_files: 3]
+  import FileFilter, only: [filter_files: 3, filter_files_flat: 3]
 
   import SoundboardWeb.Live.UploadHandler, only: [handle_upload: 3]
 
@@ -228,8 +228,7 @@ defmodule SoundboardWeb.SoundboardLive do
 
     {:noreply,
      socket
-     |> assign(:selected_tags, selected_tags)
-     |> assign(:search_query, "")}
+     |> assign(:selected_tags, selected_tags)}
   end
 
   @impl true
@@ -614,7 +613,7 @@ defmodule SoundboardWeb.SoundboardLive do
   @impl true
   def handle_event("play_random", _params, socket) do
     filtered_sounds =
-      filter_files(
+      filter_files_flat(
         socket.assigns.uploaded_files,
         socket.assigns.search_query,
         socket.assigns.selected_tags
