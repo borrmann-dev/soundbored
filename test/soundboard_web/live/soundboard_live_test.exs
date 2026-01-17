@@ -61,13 +61,17 @@ defmodule SoundboardWeb.SoundboardLiveTest do
     test "can play sound", %{conn: conn, sound: sound} do
       {:ok, view, _html} = live(conn, "/")
 
-      with_mock SoundboardWeb.AudioPlayer, play_sound: fn _, _ -> :ok end do
-        rendered =
-          view
-          |> element("[phx-click='play'][phx-value-name='#{sound.filename}']")
-          |> render_click()
+      with_mock SoundboardWeb.AudioPlayer,
+        play_sound: fn _, _ -> :ok end,
+        current_voice_channel: fn -> {123, 456} end do
+        with_mock Nostrum.Voice, playing?: fn _ -> false end do
+          rendered =
+            view
+            |> element("[phx-click='play'][phx-value-name='#{sound.filename}']")
+            |> render_click()
 
-        assert rendered =~ sound.filename
+          assert rendered =~ sound.filename
+        end
       end
     end
 
@@ -86,12 +90,16 @@ defmodule SoundboardWeb.SoundboardLiveTest do
       |> element("form")
       |> render_change(%{"query" => "filtered"})
 
-      with_mock SoundboardWeb.AudioPlayer, play_sound: fn _, _ -> :ok end do
-        view
-        |> element("[phx-click='play_random']")
-        |> render_click()
+      with_mock SoundboardWeb.AudioPlayer,
+        play_sound: fn _, _ -> :ok end,
+        current_voice_channel: fn -> {123, 456} end do
+        with_mock Nostrum.Voice, playing?: fn _ -> false end do
+          view
+          |> element("[phx-click='play_random']")
+          |> render_click()
 
-        assert_called(SoundboardWeb.AudioPlayer.play_sound("filtered.mp3", :_))
+          assert_called(SoundboardWeb.AudioPlayer.play_sound("filtered.mp3", :_))
+        end
       end
     end
 
@@ -116,12 +124,16 @@ defmodule SoundboardWeb.SoundboardLiveTest do
       |> element("div.hidden.sm\\:flex button[phx-value-tag='funny']")
       |> render_click()
 
-      with_mock SoundboardWeb.AudioPlayer, play_sound: fn _, _ -> :ok end do
-        view
-        |> element("[phx-click='play_random']")
-        |> render_click()
+      with_mock SoundboardWeb.AudioPlayer,
+        play_sound: fn _, _ -> :ok end,
+        current_voice_channel: fn -> {123, 456} end do
+        with_mock Nostrum.Voice, playing?: fn _ -> false end do
+          view
+          |> element("[phx-click='play_random']")
+          |> render_click()
 
-        assert_called(SoundboardWeb.AudioPlayer.play_sound("funny.mp3", :_))
+          assert_called(SoundboardWeb.AudioPlayer.play_sound("funny.mp3", :_))
+        end
       end
     end
 

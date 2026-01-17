@@ -13,15 +13,13 @@
     </h1>
     <%!-- Activity Log Box --%>
     <div class="w-full sm:w-auto flex-1 min-w-[200px] mb-4 sm:mb-0">
-      <div 
-        class="relative" 
+      <div
+        class="relative"
         id="activity-box"
         phx-click-away={if @show_activity_dropdown, do: "toggle_activity_dropdown"}
       >
-        <div
-          class="bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-3 py-2.5 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center h-10"
-        >
-          <div 
+        <div class="bg-gray-50 dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg px-3 py-2.5 hover:bg-gray-100 dark:hover:bg-gray-700 transition-colors flex items-center h-10">
+          <div
             class="flex items-center gap-2 flex-1 min-w-0 cursor-pointer"
             phx-click="toggle_activity_dropdown"
           >
@@ -29,20 +27,24 @@
               <% event = List.first(@activity_log) %>
               <%= if event[:username] do %>
                 <%= if event[:user_avatar] do %>
-                  <img src={event.user_avatar} alt={event.username} class="w-4 h-4 rounded-full flex-shrink-0" />
+                  <img
+                    src={event.user_avatar}
+                    alt={event.username}
+                    class="w-4 h-4 rounded-full flex-shrink-0"
+                  />
                 <% else %>
                   <div class="w-4 h-4 rounded-full bg-gray-300 dark:bg-gray-600 flex items-center justify-center flex-shrink-0">
                     <span class="text-xs text-gray-600 dark:text-gray-300 font-medium">
-                      <%= String.first(event.username) |> String.upcase() %>
+                      {String.first(event.username) |> String.upcase()}
                     </span>
                   </div>
                 <% end %>
               <% end %>
               <p class="text-sm font-medium text-gray-900 dark:text-gray-100 truncate flex-1 min-w-0">
                 <%= if event.type == :sound_played && event[:sound_name] do %>
-                  <%= event.username %> played <%= truncate_text(event.sound_name, 20) %>
+                  {event.username} played {truncate_text(event.sound_name, 20)}
                 <% else %>
-                  <%= event.message %>
+                  {event.message}
                 <% end %>
               </p>
             <% else %>
@@ -62,49 +64,70 @@
               stroke="currentColor"
               viewBox="0 0 24 24"
             >
-              <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7" />
+              <path
+                stroke-linecap="round"
+                stroke-linejoin="round"
+                stroke-width="2"
+                d="M19 9l-7 7-7-7"
+              />
             </svg>
           </button>
         </div>
         <%= if @show_activity_dropdown && @activity_log != [] do %>
-          <div
-            class="absolute z-50 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg max-h-60 overflow-y-auto"
-          >
+          <div class="absolute z-50 w-full mt-1 bg-white dark:bg-gray-800 border border-gray-200 dark:border-gray-700 rounded-lg shadow-lg max-h-60 overflow-y-auto">
             <div class="py-1">
               <%= for event <- @activity_log do %>
                 <div class="px-4 py-2 hover:bg-gray-50 dark:hover:bg-gray-700 border-b border-gray-100 dark:border-gray-700 last:border-b-0">
                   <div class="flex items-center gap-2">
                     <%= if event[:username] do %>
                       <%= if event[:user_avatar] do %>
-                        <img src={event.user_avatar} alt={event.username} class="w-5 h-5 rounded-full flex-shrink-0" />
+                        <img
+                          src={event.user_avatar}
+                          alt={event.username}
+                          class="w-5 h-5 rounded-full flex-shrink-0"
+                        />
                       <% else %>
                         <div class="w-5 h-5 rounded-full bg-gray-300 dark:bg-gray-600 flex items-center justify-center flex-shrink-0">
                           <span class="text-xs text-gray-600 dark:text-gray-300 font-medium">
-                            <%= String.first(event.username) |> String.upcase() %>
+                            {String.first(event.username) |> String.upcase()}
                           </span>
                         </div>
                       <% end %>
                       <div class="flex-1 min-w-0">
                         <p class="text-sm text-gray-900 dark:text-gray-100">
-                          <span class="font-medium"><%= event.username %></span>
+                          <span class="font-medium">{event.username}</span>
                           <%= if event.type == :sound_played do %>
-                            played <%= truncate_text(event[:sound_name] || SoundboardWeb.SoundHelpers.display_name(event.filename), 30) %>
+                            played {truncate_text(
+                              event[:sound_name] ||
+                                SoundboardWeb.SoundHelpers.display_name(event.filename),
+                              30
+                            )}
                           <% else %>
-                            <%= event.message %>
+                            {event.message}
                           <% end %>
                         </p>
-                        <p class="text-xs text-gray-500 dark:text-gray-400 mt-1" data-timestamp={event[:timestamp_iso] || DateTime.to_iso8601(event.timestamp)}>
+                        <p
+                          class="text-xs text-gray-500 dark:text-gray-400 mt-1"
+                          data-timestamp={
+                            event[:timestamp_iso] || DateTime.to_iso8601(event.timestamp)
+                          }
+                        >
                           <span class="timestamp-display">
-                            <%= Calendar.strftime(event.timestamp, "%H:%M:%S") %>
+                            {Calendar.strftime(event.timestamp, "%H:%M:%S")}
                           </span>
                         </p>
                       </div>
                     <% else %>
                       <div class="flex-1 min-w-0">
-                        <p class="text-sm text-gray-900 dark:text-gray-100"><%= event.message %></p>
-                        <p class="text-xs text-gray-500 dark:text-gray-400 mt-1" data-timestamp={event[:timestamp_iso] || DateTime.to_iso8601(event.timestamp)}>
+                        <p class="text-sm text-gray-900 dark:text-gray-100">{event.message}</p>
+                        <p
+                          class="text-xs text-gray-500 dark:text-gray-400 mt-1"
+                          data-timestamp={
+                            event[:timestamp_iso] || DateTime.to_iso8601(event.timestamp)
+                          }
+                        >
                           <span class="timestamp-display">
-                            <%= Calendar.strftime(event.timestamp, "%H:%M:%S") %>
+                            {Calendar.strftime(event.timestamp, "%H:%M:%S")}
                           </span>
                         </p>
                       </div>

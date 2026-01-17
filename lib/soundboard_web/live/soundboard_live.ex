@@ -6,11 +6,11 @@ defmodule SoundboardWeb.SoundboardLive do
   import DeleteModal
   import UploadModal
   import SoundboardWeb.Components.Soundboard.TagComponents, only: [tag_filter_button: 1]
-  alias SoundboardWeb.Presence
-  alias Soundboard.{Accounts.User, Favorites, Repo, Sound, Volume}
   alias Nostrum.Voice
-  require Logger
+  alias Soundboard.{Accounts.User, Favorites, Repo, Sound, Volume}
   alias SoundboardWeb.Live.{FileFilter, TagHandler, UploadHandler}
+  alias SoundboardWeb.Presence
+  require Logger
   import Ecto.Query
 
   import TagHandler, only: [all_tags: 1, tag_selected?: 2]
@@ -141,6 +141,22 @@ defmodule SoundboardWeb.SoundboardLive do
   end
 
   @impl true
+  def handle_event("toggle_tag_filter", %{"tag" => tag_name}, socket) do
+    tag = Enum.find(all_tags(socket.assigns.uploaded_files), &(&1.name == tag_name))
+    current_tag = List.first(socket.assigns.selected_tags)
+    selected_tags = if current_tag && current_tag.id == tag.id, do: [], else: [tag]
+
+    {:noreply,
+     socket
+     |> assign(:selected_tags, selected_tags)}
+  end
+
+  @impl true
+  def handle_event("clear_tag_filters", _, socket) do
+    {:noreply, assign(socket, :selected_tags, [])}
+  end
+
+  @impl true
   def handle_event("toggle_edit_join_sound", _params, socket) do
     current_sound = socket.assigns.current_sound
     user_id = socket.assigns.current_user.id
@@ -205,88 +221,23 @@ defmodule SoundboardWeb.SoundboardLive do
   end
 
   @impl true
-  def handle_event("play", %{"name" => filename}, socket) do
-    username =
-      if socket.assigns.current_user,
-        do: socket.assigns.current_user.username,
-        else: "Anonymous"
-
-    if socket.assigns.current_user do
-      # Check if bot is connected before trying to play
-      voice_channel = SoundboardWeb.AudioPlayer.current_voice_channel()
-      
-      if voice_channel == nil do
-        # Bot not connected - show toast notification to this user only
-        {:noreply, 
-         socket
-         |> put_flash(:error, "Bot ist noch nicht connected. Verwende !join in Discord zuerst.")
-         |> clear_flash_after_timeout()}
-      else
-        # Check if sound is already playing
-        {guild_id, _channel_id} = voice_channel
-        is_playing = Voice.playing?(guild_id)
-        
-        if is_playing do
-          # Sound already playing - show toast notification to this user only
-          {:noreply,
-           socket
-           |> put_flash(:error, "Ein Sound wird bereits abgespielt. Bitte warten...")
-           |> clear_flash_after_timeout()}
-        else
-          SoundboardWeb.AudioPlayer.play_sound(filename, username)
-          {:noreply, socket}
-        end
-      end
-    else
-      {:noreply, socket}
-    end
-  end
-
-  @impl true
-  def handle_event("search", %{"query" => query}, socket) do
-    {:noreply, assign(socket, :search_query, query)}
-  end
-
-  @impl true
-  def handle_event("toggle_tag_filter", %{"tag" => tag_name}, socket) do
-    tag = Enum.find(all_tags(socket.assigns.uploaded_files), &(&1.name == tag_name))
-    current_tag = List.first(socket.assigns.selected_tags)
-    selected_tags = if current_tag && current_tag.id == tag.id, do: [], else: [tag]
-
-    {:noreply,
-     socket
-     |> assign(:selected_tags, selected_tags)}
-  end
-
-  @impl true
-  def handle_event("clear_tag_filters", _, socket) do
-    {:noreply, assign(socket, :selected_tags, [])}
-  end
-
-  @impl true
-  def handle_event("edit", %{"id" => id}, socket) do
-    sound = Soundboard.Sound.get_sound!(id)
-    {:noreply, assign(socket, current_sound: sound, show_modal: true)}
-  end
-
-  @impl true
   def handle_event("save_upload", params, socket) do
     Logger.info("SAVE UPLOAD TRIGGERED with params: #{inspect(params)}")
 
     params =
       params
-      |> Map.merge(%{
-        "is_join_sound" => socket.assigns.is_join_sound,
-        "is_leave_sound" => socket.assigns.is_leave_sound,
-        "source_type" => socket.assigns.source_type,
-        "name" => params["name"],
-        "url" => params["url"]
-      })
+      |> Map.put_new("name", socket.assigns.upload_name)
+      |> Map.put_new("url", socket.assigns.url)
+      |> Map.put_new("source_type", socket.assigns.source_type)
+      |> Map.put_new("tags", socket.assigns.upload_tags)
+      |> Map.put_new("keywords", socket.assigns.upload_keywords)
+      |> Map.put_new("volume", socket.assigns.upload_volume)
 
     case handle_upload(socket, params, &handle_uploaded_entries/3) do
-      {:ok, _sound} ->
+      {:ok, _} ->
         {:noreply,
          socket
+         |> load_sound_files()
          |> assign(:show_upload_modal, false)
          |> assign(:upload_tags, [])
          |> assign(:upload_name, "")
@@ -294,19 +245,13 @@ defmodule SoundboardWeb.SoundboardLive do
          |> assign(:upload_tag_input, "")
          |> assign(:upload_tag_suggestions, [])
          |> assign(:upload_keywords, "")
-         |> assign(:is_join_sound, false)
-         |> assign(:is_leave_sound, false)
          |> assign(:upload_volume, 100)
-         |> assign(:source_type, "url")
-         |> load_sound_files()
          |> put_flash(:info, "Sound added successfully")}
 
       {:error, message, socket} ->
         {:noreply, put_flash(socket, :error, message)}
     end
   end
-
-  # removed obsolete "check_filename" handler; validation now covered by validate_upload
 
   @impl true
   def handle_event("validate_upload", %{"_target" => [field]} = params, socket)
@@ -319,10 +264,30 @@ defmodule SoundboardWeb.SoundboardLive do
     handle_upload_validation(socket, params)
   end
 
+  @impl true
   def handle_event("validate_upload", params, socket) do
     Logger.info("Validating upload with params: #{inspect(params)}")
     socket = validate_existing_entries(socket)
     handle_upload_validation(socket, params)
+  end
+
+  @impl true
+  def handle_event("play", %{"name" => filename}, socket) do
+    username =
+      if socket.assigns.current_user,
+        do: socket.assigns.current_user.username,
+        else: "Anonymous"
+
+    if socket.assigns.current_user do
+      handle_play_with_checks(socket, filename, username)
+    else
+      {:noreply, socket}
+    end
+  end
+
+  @impl true
+  def handle_event("search", %{"query" => query}, socket) do
+    {:noreply, assign(socket, :search_query, query)}
   end
 
   @impl true
@@ -485,6 +450,12 @@ defmodule SoundboardWeb.SoundboardLive do
      |> assign(:upload_tag_suggestions, [])
      |> assign(:upload_keywords, "")
      |> assign(:upload_volume, 100)}
+  end
+
+  @impl true
+  def handle_event("edit", %{"id" => id}, socket) do
+    sound = Soundboard.Sound.get_sound!(id)
+    {:noreply, assign(socket, current_sound: sound, show_modal: true)}
   end
 
   @impl true
@@ -657,31 +628,7 @@ defmodule SoundboardWeb.SoundboardLive do
             else: "Anonymous"
 
         if socket.assigns.current_user do
-          # Check if bot is connected before trying to play
-          voice_channel = SoundboardWeb.AudioPlayer.current_voice_channel()
-          
-          if voice_channel == nil do
-            # Bot not connected - show toast notification to this user only
-            {:noreply,
-             socket
-             |> put_flash(:error, "Bot ist noch nicht connected. Verwende !join in Discord zuerst.")
-             |> clear_flash_after_timeout()}
-          else
-            # Check if sound is already playing
-            {guild_id, _channel_id} = voice_channel
-            is_playing = Voice.playing?(guild_id)
-            
-            if is_playing do
-              # Sound already playing - show toast notification to this user only
-              {:noreply,
-               socket
-               |> put_flash(:error, "Ein Sound wird bereits abgespielt. Bitte warten...")
-               |> clear_flash_after_timeout()}
-            else
-              SoundboardWeb.AudioPlayer.play_sound(sound.filename, username)
-              {:noreply, socket}
-            end
-          end
+          handle_play_with_checks(socket, sound.filename, username)
         else
           {:noreply, socket}
         end
@@ -702,17 +649,50 @@ defmodule SoundboardWeb.SoundboardLive do
   end
 
   @impl true
+  def handle_event("toggle_activity_dropdown", _params, socket) do
+    {:noreply, assign(socket, :show_activity_dropdown, !socket.assigns.show_activity_dropdown)}
+  end
+
+  defp handle_play_with_checks(socket, filename, username) do
+    voice_channel = SoundboardWeb.AudioPlayer.current_voice_channel()
+
+    cond do
+      voice_channel == nil ->
+        {:noreply,
+         socket
+         |> put_flash(:error, "Bot ist noch nicht connected. Verwende !join in Discord zuerst.")
+         |> clear_flash_after_timeout()}
+
+      sound_already_playing?(voice_channel) ->
+        {:noreply,
+         socket
+         |> put_flash(:error, "Ein Sound wird bereits abgespielt. Bitte warten...")
+         |> clear_flash_after_timeout()}
+
+      true ->
+        SoundboardWeb.AudioPlayer.play_sound(filename, username)
+        {:noreply, socket}
+    end
+  end
+
+  defp sound_already_playing?({guild_id, _channel_id}) do
+    Voice.playing?(guild_id)
+  end
+
+  @impl true
   def handle_info({:error, message}, socket) do
     # Only show broadcast errors if they're not user-specific
     # User-specific errors are handled directly in handle_event
     # This catches other system-wide errors
     now = DateTime.utc_now()
+
     event = %{
       type: :error,
       message: message,
       timestamp: now,
       timestamp_iso: DateTime.to_iso8601(now)
     }
+
     {:noreply, add_activity_event(socket, event)}
   end
 
@@ -722,6 +702,7 @@ defmodule SoundboardWeb.SoundboardLive do
     # Get user info once when event is created to avoid DB queries on each render
     user = Repo.get_by(User, username: username)
     now = DateTime.utc_now()
+
     event = %{
       type: :sound_played,
       message: "#{username} played #{sound_name}",
@@ -732,59 +713,21 @@ defmodule SoundboardWeb.SoundboardLive do
       timestamp: now,
       timestamp_iso: DateTime.to_iso8601(now)
     }
+
     {:noreply, add_activity_event(socket, event)}
-  end
-
-  # Add event to activity log (keep last 10)
-  defp add_activity_event(socket, event) do
-    log = [event | socket.assigns.activity_log] |> Enum.take(10)
-    assign(socket, :activity_log, log)
-  end
-
-  @impl true
-  def handle_event("toggle_activity_dropdown", _params, socket) do
-    {:noreply, assign(socket, :show_activity_dropdown, !socket.assigns.show_activity_dropdown)}
   end
 
   @impl true
   def handle_info({:files_updated}, socket) do
+    now = DateTime.utc_now()
+
     event = %{
       type: :files_updated,
       message: "Sound library updated",
-      timestamp: DateTime.utc_now()
-    }
-    {:noreply, add_activity_event(socket, event)}
-  end
-
-  @impl true
-  def handle_info({:sound_stopped}, socket) do
-    now = DateTime.utc_now()
-    event = %{
-      type: :sound_stopped,
-      message: "All sounds stopped",
       timestamp: now,
       timestamp_iso: DateTime.to_iso8601(now)
     }
-    {:noreply, add_activity_event(socket, event)}
-  end
 
-  @impl true
-  def handle_info(%{event: "presence_diff", payload: _diff}, socket) do
-    presences = Presence.list(@presence_topic)
-
-    {:noreply,
-     socket
-     |> assign(:presences, presences)
-     |> assign(:presence_count, map_size(presences))}
-  end
-
-  @impl true
-  def handle_info(:clear_flash, socket) do
-    {:noreply, clear_flash(socket)}
-  end
-
-  @impl true
-  def handle_info({:files_updated}, socket) do
     # Reload the uploaded files list with preloaded associations and proper sorting
     uploaded_files =
       Sound
@@ -793,7 +736,29 @@ defmodule SoundboardWeb.SoundboardLive do
       # Ensure consistent sorting
       |> Enum.sort_by(&String.downcase(&1.filename))
 
-    {:noreply, assign(socket, :uploaded_files, uploaded_files)}
+    {:noreply,
+     socket
+     |> assign(:uploaded_files, uploaded_files)
+     |> add_activity_event(event)}
+  end
+
+  @impl true
+  def handle_info({:sound_stopped}, socket) do
+    now = DateTime.utc_now()
+
+    event = %{
+      type: :sound_stopped,
+      message: "All sounds stopped",
+      timestamp: now,
+      timestamp_iso: DateTime.to_iso8601(now)
+    }
+
+    {:noreply, add_activity_event(socket, event)}
+  end
+
+  @impl true
+  def handle_info(:clear_flash, socket) do
+    {:noreply, clear_flash(socket)}
   end
 
   @impl true
@@ -807,6 +772,22 @@ defmodule SoundboardWeb.SoundboardLive do
   @impl true
   def handle_info({:stats_updated}, socket) do
     {:noreply, load_sound_files(socket)}
+  end
+
+  @impl true
+  def handle_info(%{event: "presence_diff", payload: _diff}, socket) do
+    presences = Presence.list(@presence_topic)
+
+    {:noreply,
+     socket
+     |> assign(:presences, presences)
+     |> assign(:presence_count, map_size(presences))}
+  end
+
+  # Add event to activity log (keep last 10)
+  defp add_activity_event(socket, event) do
+    log = [event | socket.assigns.activity_log] |> Enum.take(10)
+    assign(socket, :activity_log, log)
   end
 
   defp handle_save_sound(sound, user_id, params, socket) do
