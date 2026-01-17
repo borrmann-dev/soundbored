@@ -64,9 +64,9 @@ defmodule SoundboardWeb.Components.Soundboard.TagComponents do
             class={@suggestion_class}
           >
             <%= if match_part != "" do %>
-              <%= before_part %><mark class="bg-yellow-200 dark:bg-yellow-800 font-semibold"><%= match_part %></mark><%= after_part %>
+              {before_part}<mark class="bg-yellow-200 dark:bg-yellow-800 font-semibold"><%= match_part %></mark>{after_part}
             <% else %>
-              <%= tag_name %>
+              {tag_name}
             <% end %>
           </button>
         <% end %>
@@ -180,7 +180,7 @@ defmodule SoundboardWeb.Components.Soundboard.TagComponents do
       query_lower = String.downcase(query)
 
       case String.split(text_lower, query_lower, parts: 2) do
-        [before_lower, after_lower] ->
+        [before_lower, _after_lower] ->
           # Find the actual position in the original text (case-sensitive)
           before_length = String.length(before_lower)
           match_length = String.length(query)
