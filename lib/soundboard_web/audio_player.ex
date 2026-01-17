@@ -106,7 +106,7 @@ defmodule SoundboardWeb.AudioPlayer do
     # Clear current_playback task if it exists
     new_state = %{state | current_playback: nil}
 
-    broadcast_success("All sounds stopped", "System")
+    broadcast_stopped()
     {:noreply, new_state}
   end
 
@@ -118,7 +118,7 @@ defmodule SoundboardWeb.AudioPlayer do
   end
 
   def handle_cast({:play_sound, _sound_name, _username}, %{voice_channel: nil} = state) do
-    broadcast_error("Bot is not connected to a voice channel. Use !join in Discord first.")
+    # Don't broadcast - error is handled in LiveView before calling play_sound
     {:noreply, state}
   end
 
@@ -136,7 +136,7 @@ defmodule SoundboardWeb.AudioPlayer do
         "Blocking sound #{sound_name} - another sound is already playing (Voice.playing?: #{is_playing}, has_task: #{has_active_task})"
       )
 
-      broadcast_error("Ein Sound wird bereits abgespielt. Bitte warten...")
+      # Don't broadcast - error is handled in LiveView before calling play_sound
       {:noreply, state}
     else
       start_sound_playback(state, guild_id, channel_id, sound_name, username)
@@ -875,6 +875,14 @@ defmodule SoundboardWeb.AudioPlayer do
       Soundboard.PubSub,
       "soundboard",
       {:sound_played, %{filename: sound_name, played_by: username}}
+    )
+  end
+
+  defp broadcast_stopped do
+    Phoenix.PubSub.broadcast(
+      Soundboard.PubSub,
+      "soundboard",
+      {:sound_stopped}
     )
   end
 

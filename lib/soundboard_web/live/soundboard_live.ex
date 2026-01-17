@@ -7,7 +7,8 @@ defmodule SoundboardWeb.SoundboardLive do
   import UploadModal
   import SoundboardWeb.Components.Soundboard.TagComponents, only: [tag_filter_button: 1]
   alias SoundboardWeb.Presence
-  alias Soundboard.{Favorites, Repo, Sound, Volume}
+  alias Soundboard.{Accounts.User, Favorites, Repo, Sound, Volume}
+  alias Nostrum.Voice
   require Logger
   alias SoundboardWeb.Live.{FileFilter, TagHandler, UploadHandler}
   import Ecto.Query
@@ -67,6 +68,8 @@ defmodule SoundboardWeb.SoundboardLive do
     |> assign(:editing, nil)
     |> assign(:show_modal, false)
     |> assign(:current_sound, nil)
+    |> assign(:activity_log, [])
+    |> assign(:show_activity_dropdown, false)
     |> assign(:tag_input, "")
     |> assign(:tag_suggestions, [])
     |> assign(:show_upload_modal, false)
@@ -209,10 +212,34 @@ defmodule SoundboardWeb.SoundboardLive do
         else: "Anonymous"
 
     if socket.assigns.current_user do
-      SoundboardWeb.AudioPlayer.play_sound(filename, username)
+      # Check if bot is connected before trying to play
+      voice_channel = SoundboardWeb.AudioPlayer.current_voice_channel()
+      
+      if voice_channel == nil do
+        # Bot not connected - show toast notification to this user only
+        {:noreply, 
+         socket
+         |> put_flash(:error, "Bot ist noch nicht connected. Verwende !join in Discord zuerst.")
+         |> clear_flash_after_timeout()}
+      else
+        # Check if sound is already playing
+        {guild_id, _channel_id} = voice_channel
+        is_playing = Voice.playing?(guild_id)
+        
+        if is_playing do
+          # Sound already playing - show toast notification to this user only
+          {:noreply,
+           socket
+           |> put_flash(:error, "Ein Sound wird bereits abgespielt. Bitte warten...")
+           |> clear_flash_after_timeout()}
+        else
+          SoundboardWeb.AudioPlayer.play_sound(filename, username)
+          {:noreply, socket}
+        end
+      end
+    else
+      {:noreply, socket}
     end
-
-    {:noreply, socket}
   end
 
   @impl true
@@ -629,12 +656,35 @@ defmodule SoundboardWeb.SoundboardLive do
             do: socket.assigns.current_user.username,
             else: "Anonymous"
 
-        # Broadcast to Discord if connected
-        if connected?(socket) do
-          SoundboardWeb.AudioPlayer.play_sound(sound.filename, username)
+        if socket.assigns.current_user do
+          # Check if bot is connected before trying to play
+          voice_channel = SoundboardWeb.AudioPlayer.current_voice_channel()
+          
+          if voice_channel == nil do
+            # Bot not connected - show toast notification to this user only
+            {:noreply,
+             socket
+             |> put_flash(:error, "Bot ist noch nicht connected. Verwende !join in Discord zuerst.")
+             |> clear_flash_after_timeout()}
+          else
+            # Check if sound is already playing
+            {guild_id, _channel_id} = voice_channel
+            is_playing = Voice.playing?(guild_id)
+            
+            if is_playing do
+              # Sound already playing - show toast notification to this user only
+              {:noreply,
+               socket
+               |> put_flash(:error, "Ein Sound wird bereits abgespielt. Bitte warten...")
+               |> clear_flash_after_timeout()}
+            else
+              SoundboardWeb.AudioPlayer.play_sound(sound.filename, username)
+              {:noreply, socket}
+            end
+          end
+        else
+          {:noreply, socket}
         end
-
-        {:noreply, socket}
     end
   end
 
@@ -653,15 +703,69 @@ defmodule SoundboardWeb.SoundboardLive do
 
   @impl true
   def handle_info({:error, message}, socket) do
-    {:noreply, put_flash(socket, :error, message)}
+    # Only show broadcast errors if they're not user-specific
+    # User-specific errors are handled directly in handle_event
+    # This catches other system-wide errors
+    now = DateTime.utc_now()
+    event = %{
+      type: :error,
+      message: message,
+      timestamp: now,
+      timestamp_iso: DateTime.to_iso8601(now)
+    }
+    {:noreply, add_activity_event(socket, event)}
   end
 
   @impl true
   def handle_info({:sound_played, %{filename: filename, played_by: username}}, socket) do
-    {:noreply,
-     socket
-     |> put_flash(:info, "#{username} played #{filename}")
-     |> clear_flash_after_timeout()}
+    sound_name = SoundboardWeb.SoundHelpers.display_name(filename)
+    # Get user info once when event is created to avoid DB queries on each render
+    user = Repo.get_by(User, username: username)
+    now = DateTime.utc_now()
+    event = %{
+      type: :sound_played,
+      message: "#{username} played #{sound_name}",
+      filename: filename,
+      sound_name: sound_name,
+      username: username,
+      user_avatar: if(user, do: user.avatar, else: nil),
+      timestamp: now,
+      timestamp_iso: DateTime.to_iso8601(now)
+    }
+    {:noreply, add_activity_event(socket, event)}
+  end
+
+  # Add event to activity log (keep last 10)
+  defp add_activity_event(socket, event) do
+    log = [event | socket.assigns.activity_log] |> Enum.take(10)
+    assign(socket, :activity_log, log)
+  end
+
+  @impl true
+  def handle_event("toggle_activity_dropdown", _params, socket) do
+    {:noreply, assign(socket, :show_activity_dropdown, !socket.assigns.show_activity_dropdown)}
+  end
+
+  @impl true
+  def handle_info({:files_updated}, socket) do
+    event = %{
+      type: :files_updated,
+      message: "Sound library updated",
+      timestamp: DateTime.utc_now()
+    }
+    {:noreply, add_activity_event(socket, event)}
+  end
+
+  @impl true
+  def handle_info({:sound_stopped}, socket) do
+    now = DateTime.utc_now()
+    event = %{
+      type: :sound_stopped,
+      message: "All sounds stopped",
+      timestamp: now,
+      timestamp_iso: DateTime.to_iso8601(now)
+    }
+    {:noreply, add_activity_event(socket, event)}
   end
 
   @impl true
@@ -740,6 +844,22 @@ defmodule SoundboardWeb.SoundboardLive do
     Process.send_after(self(), :clear_flash, 3000)
     socket
   end
+
+  # Helper to get user by username for activity log display (public for template)
+  def get_user_by_username(username) do
+    Repo.get_by(User, username: username)
+  end
+
+  # Helper to truncate text for activity log display (public for template)
+  def truncate_text(text, max_length) when is_binary(text) do
+    if String.length(text) > max_length do
+      String.slice(text, 0, max_length) <> "..."
+    else
+      text
+    end
+  end
+
+  def truncate_text(text, _max_length), do: to_string(text)
 
   defp handle_uploaded_entries(socket, name, func) do
     Phoenix.LiveView.consume_uploaded_entries(socket, name, func)
